@@ -123,29 +123,33 @@ class ArchiveManager:
                 if section not in merged:
                     merged[section] = []
 
+                # Create set of existing IDs
                 existing_ids = set()
                 section_key = section.replace("-", "")
                 for item in merged[section]:
                     if section_key in item and "id_str" in item[section_key]:
                         existing_ids.add(item[section_key]["id_str"])
 
+                # Add new items that don't exist
                 for item in new_data[section]:
-                    if (
-                        section_key in item
-                        and "id_str" in item[section_key]
-                        and item[section_key]["id_str"] not in existing_ids
-                    ):
+                    if (section_key in item and
+                        "id_str" in item[section_key] and
+                        item[section_key]["id_str"] not in existing_ids):
                         merged[section].append(item)
+                        existing_ids.add(item[section_key]["id_str"])
 
-        merged["account"] = new_data.get("account", merged.get("account", {}))
-        merged["profile"] = new_data.get("profile", merged.get("profile", {}))
+        # Update profile and account info
+        if "profile" in new_data:
+            merged["profile"] = new_data["profile"]
+        if "account" in new_data:
+            merged["account"] = new_data["account"]
 
+        # Log section sizes
         for section in sections:
             if section in merged:
                 logger.debug("  %s: %d items", section, len(merged[section]))
 
         return merged
-
     def get_existing_archive(self, username: str) -> Dict:
         """Get the most recent existing archive for a user."""
         if username not in self.metadata:
@@ -200,37 +204,89 @@ def get_archive(username: str) -> Dict:
     try:
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
+
+        # Log raw response details
+        logger.debug("Response status: %d", response.status_code)
+        logger.debug("Response headers: %s", dict(response.headers))
+        logger.debug("Response size: %d bytes", len(response.content))
+
+        # Parse the JSON response
         archive_data = response.json()
 
-        logger.debug("Archive structure for %s:", username)
+        # Log the raw structure
+        logger.debug("Raw archive structure:")
         logger.debug("Top-level keys: %s", list(archive_data.keys()))
 
-        sections = [
-            "tweets", "like", "following", "follower",
-            "community-tweet", "note-tweet"
-        ]
-        for section in sections:
-            if section in archive_data:
-                section_data = archive_data[section]
-                logger.debug("%s type: %s", section, type(section_data))
-                logger.debug("%s length: %d", section, len(section_data))
-                if section_data:
-                    sample = section_data[0]
-                    logger.debug(
-                        "Sample %s keys: %s",
+        # Debug first items of each section
+        for section in ["tweets", "like", "following", "follower", "community-tweet", "note-tweet"]:
+            if section in archive_data and archive_data[section]:
+                first_item = archive_data[section][0]
+                logger.debug("First %s item: %s", section, json.dumps(first_item, indent=2))
+
+                # If it's an empty list or not a list, log that
+                if not isinstance(archive_data[section], list):
+                    logger.warning(
+                        "%s is not a list, it's a %s",
                         section,
-                        list(sample.keys()) if sample else "empty"
+                        type(archive_data[section])
+                    )
+                elif not archive_data[section]:
+                    logger.warning("%s is an empty list", section)
+
+        # Initialize the normalized structure
+        result = {
+            "tweets": [],
+            "like": [],
+            "following": [],
+            "follower": [],
+            "community-tweet": [],
+            "note-tweet": [],
+            "account": archive_data.get("account", {}),
+            "profile": archive_data.get("profile", {})
+        }
+
+        # Copy raw arrays directly
+        for section in ["tweets", "like", "following", "follower", "community-tweet", "note-tweet"]:
+            if section in archive_data and isinstance(archive_data[section], list):
+                result[section] = archive_data[section]
+                logger.debug(
+                    "%s: copied %d items directly",
+                    section,
+                    len(archive_data[section])
+                )
+                if archive_data[section]:
+                    logger.debug(
+                        "Sample %s: %s",
+                        section,
+                        json.dumps(archive_data[section][0], indent=2)
                     )
 
-        return archive_data
+        # Log final counts
+        logger.debug("Final result counts:")
+        for section, data in result.items():
+            if isinstance(data, list):
+                logger.debug("%s: %d items", section, len(data))
+            else:
+                logger.debug("%s: %s", section, "present" if data else "empty")
+
+        return result
+
     except requests.exceptions.RequestException as e:
         logger.error("Error fetching archive for %s: %s", username, e)
         return None
-
+    except json.JSONDecodeError as e:
+        logger.error("Error parsing JSON for %s: %s", username, e)
+        logger.debug("Raw response content: %s", response.text[:1000])  # First 1000 chars
+        return None
+    except Exception as e:  # pylint: disable=broad-except
+        logger.error("Unexpected error processing archive for %s: %s", username, e)
+        return None
 
 def save_archive(username: str, archive_data: Dict, timestamp: datetime) -> str:
     """Save archive to file and return filename."""
-    filename = f"{username}-{timestamp.isoformat()}.json"
+    # Replace colons with underscores in timestamp for valid filename
+    timestamp_str = timestamp.isoformat().replace(':', '_')
+    filename = f"{username}-{timestamp_str}.json"
     filepath = OUTPUT_DIR / filename
 
     try:
