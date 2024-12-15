@@ -1,9 +1,13 @@
 #Functions to extract data from files and parse content
+from coretypes import MediaFile, Tweet
+import datetime
 import os
 import json
 import re
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Tuple, list, Optional
+
+from twitter_archive_processor.utilities import load_json_file, process_data_for_type
 
 logger = logging.getLogger(__name__)
 
@@ -15,30 +19,6 @@ def clean_json_string(json_string: str) -> str:
 
     return cleaned
 
-def load_json_file(file_path: str) -> Any:
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            raw_string = file.read()
-            cleaned_string = clean_json_string(raw_string)
-            data = json.loads(cleaned_string)
-
-            return data
-    except json.JSONDecodeError:
-        #might be wrapped differently
-        with open(file_path, 'r', encoding='utf=8') as f:
-            raw_content = f.read()
-        #extract from JS variable?
-        match = re.search(r'window\.__THAR_CONFIG\s*=\s*{{.*}}', raw_content), re.DOALL)
-        if match:
-            return json.loads(match.group(1))
-        else:
-            logger.error(f"Failed to parse FSON from {file_path}")
-
-            return None
-    except Exception as e:
-        logger.warning(f"Error processing file {file_path: {e}")
-                       
-        return None
 
 def extract_manifest(archive_path: str) -> Dict[str, Any]:
     manifest_path = os.path.join(archive_path, 'data', 'manifest.js')
@@ -48,8 +28,8 @@ def extract_manifest(archive_path: str) -> Dict[str, Any]:
         return {}
     return data
 
-def get_media_files(tweet_id: str, media_data: Dict[str, Any], media_dir: str) -> List[str]:
-    # List of media files
+def get_media_files(tweet_id: str, media_data: Dict[str, Any], media_dir: str) -> list[str]:
+    # list of media files
     try:
         all_files = os.listdir(media_dir)  # Edit media_folder to actual file path
     except Exception as e:
@@ -77,9 +57,9 @@ def get_media_type(filename: str) -> str:
     
 
 
-def extract_tweet(item: Dict[str, Any], content_source: str, media_dir:str) -> Optional[Tweet]:  #extract tweet data for a single tweet
+def extract_tweet(item: dict[str, Any], content_source: str, media_dir:str) -> Optional[Tweet]:  #extract tweet data for a single tweet
     tweet_id = item.get('id') or item.get('tweetId') #check file type to verify which one is used
-    if not content_id:
+    if not tweet_id:
         logger.warning(f"Tweet missing ID: {item}")
         return None
     text = item.get['text'] or item.get('full_text') or item.get('fullText', '')  #Check actual file type to verify which one is used
@@ -87,32 +67,32 @@ def extract_tweet(item: Dict[str, Any], content_source: str, media_dir:str) -> O
     parent_id = item.get('in_reply_to_status_id', None)
 
     #Append associated media files
-    media_files_names = get_media_files(tweet_id, item, media_dir)
+    media_file_names = get_media_files(tweet_id, item, media_dir)
     media_file_objects = []
     for fname in media_file_names:
         media_type = get_media_type(fname)
-        media_path = os.path.join(media_folder, fname)
+        media_path = os.path.join(media_dir, fname)
         metadata = {
             'parent_tweet': item
             #Add more metadata as needed
         }
         media_file_objects.append(MediaFile(
-            id=f"{content_id}_{os.path.splittext(fname)[0]}",
+            id=f"{tweet_id}_{os.path.splittext(fname)[0]}",
             content_type=media_type,
             path=media_path,
             metadata=metadata
         ))
-   return Tweet(
-       id=content_id,
-       text=text,
-       metadata=item,
-       timestamp=timestamp,
-       parent_id=parent_id,
-       media_files=media_file_objects,
-       content_source=content_source
-   )
+    return Tweet(
+        id=id,
+        text=text,
+        metadata=item,
+        timestamp=timestamp,
+        parent_id=parent_id,
+        media_files=media_file_objects,
+        content_source=content_source
+    )
 
-def extract_thread(file_data: List[Dict[str, Any]], media_dir: str, content_source: str) -> List[Tweet]:
+def extract_ConvoThread(file_data: list[Dict[str, Any]], media_dir: str, content_source: str) -> list[Tweet]:
     results = []
     for entry in file_data:
         tweet_data = entry.get('tweet')
@@ -122,7 +102,7 @@ def extract_thread(file_data: List[Dict[str, Any]], media_dir: str, content_sour
                 results.append(tweet)
     return results
 
-def extract_likes(file_data: List[Dict[str, Any]], media_dir: str, content_source: str) -> List[Tweet]:
+def extract_likes(file_data: list[Dict[str, Any]], media_dir: str, content_source: str) -> list[Tweet]:
     results = []
     for entry in file_data:
         tweet_data = entry.get('like')
@@ -132,7 +112,7 @@ def extract_likes(file_data: List[Dict[str, Any]], media_dir: str, content_sourc
                 results.append(tweet)
     return results    
 
-def extract_archive_data(archive_path: str) -> Dict[str, List[Tweet]]:
+def extract_archive_data(archive_path: str) -> Dict[str, list[Tweet]]:
     manifest_data = extract_manifest(archive_path)
     if not manifest_data:
         logger.error("No manifest data found.")
@@ -145,7 +125,7 @@ def extract_archive_data(archive_path: str) -> Dict[str, List[Tweet]]:
     
     #Map known data types to their extractor functions
     extractors = {
-        'tweet': extract_thread,
+        'tweet': extract_ConvoThread,
         'like': extract_likes
     }
 
@@ -158,7 +138,7 @@ def extract_archive_data(archive_path: str) -> Dict[str, List[Tweet]]:
     
     return results
 
-def get_conversation_data(contents; List[Content]) -> List[Message]:
+def get_conversation_data(contents: list[Content]) -> list[Message]:
     conversation_data = []
     current_role = None
     buffer = []
@@ -180,7 +160,7 @@ def get_conversation_data(contents; List[Content]) -> List[Message]:
     conversation_data = trim_conversation_to_last_assistant(conversation_data)
     return conversation_data
 
-def get_conversation_texts(contents: List[Content]) -> List[Tuple[str, str]]:
+def get_conversation_texts(contents: list[Content]) -> list[Tuple[str, str]]:
     result = []
     for content in contents:
         if isinstance(content, Message):
