@@ -82,23 +82,49 @@ class MixPR:
 
     def _compute_adjacency_matrix(self) -> sparse.csr_matrix:
         """
-        Compute and normalize the adjacency matrix.
-
-        Returns:
-            Sparse adjacency matrix with normalized columns
+        Compute and normalize the adjacency matrix combining text similarity,
+        tweet graph relationships, and user similarity.
         """
-        # Compute cosine similarity matrix
+        # Compute text similarity matrix
         similarity_matrix = self.embeddings @ self.embeddings.T
-
-        # Sparsify by threshold
         similarity_matrix = sparse.csr_matrix(similarity_matrix)
-        similarity_matrix.data[
-            similarity_matrix.data < self.config.similarity_threshold
-        ] = 0
-        similarity_matrix.eliminate_zeros()
-
-        # Normalize columns for PageRank
-        return normalize(similarity_matrix, norm='l1', axis=0)
+        
+        # Create graph relationship matrix
+        graph_matrix = sparse.lil_matrix((len(self.tweets), len(self.tweets)))
+        for idx, tweet in enumerate(self.tweets):
+            # Add reply relationships
+            if tweet.reply_to_tweet_id in self.tweet_id_to_idx:
+                reply_idx = self.tweet_id_to_idx[tweet.reply_to_tweet_id]
+                graph_matrix[idx, reply_idx] = self.config.reply_weight
+                graph_matrix[reply_idx, idx] = self.config.reply_weight
+                
+            # Add quote relationships
+            if tweet.quoted_tweet_id in self.tweet_id_to_idx:
+                quote_idx = self.tweet_id_to_idx[tweet.quoted_tweet_id]
+                graph_matrix[idx, quote_idx] = self.config.quote_weight
+                graph_matrix[quote_idx, idx] = self.config.quote_weight
+                
+            # Add user similarity relationships
+            if tweet.author_id and self.user_similarity_matrix is not None:
+                author_idx = self.user_to_idx.get(tweet.author_id)
+                if author_idx is not None:
+                    for other_idx in range(len(self.tweets)):
+                        other_tweet = self.tweets[other_idx]
+                        if other_tweet.author_id:
+                            other_author_idx = self.user_to_idx.get(other_tweet.author_id)
+                            if other_author_idx is not None:
+                                similarity = self.user_similarity_matrix[author_idx, other_author_idx]
+                                if similarity > 0:
+                                    graph_matrix[idx, other_idx] = similarity * self.config.user_similarity_weight
+        
+        # Combine matrices
+        combined_matrix = (1 - self.config.graph_weight) * similarity_matrix + \
+                         self.config.graph_weight * graph_matrix.tocsr()
+        
+        # Sparsify and normalize
+        combined_matrix.data[combined_matrix.data < self.config.similarity_threshold] = 0
+        combined_matrix.eliminate_zeros()
+        return normalize(combined_matrix, norm='l1', axis=0)
 
     def _personalized_pagerank(
         self,
@@ -169,31 +195,19 @@ class MixPR:
         k: int = 10,
         force_mode: Optional[str] = None
     ) -> List[RetrievalResult]:
-        """
-        Retrieve k most relevant tweets for the query tweet.
-
-        Args:
-            query_tweet: Tweet to find context for
-            k: Number of tweets to retrieve
-            force_mode: Force 'local' or 'global' mode, or None for automatic
-
-        Returns:
-            List of retrieval results ordered by relevance and time
-        """
+        """Modified retrieve method"""
         query_idx = self.tweet_id_to_idx[query_tweet.id]
-
+        
         # Determine retrieval mode
-        if force_mode == 'local':
-            alpha = self.config.local_alpha
-        elif force_mode == 'global':
-            alpha = 0.0
-        else:
-            is_local = self._classify_query_type(query_tweet)
-            alpha = self.config.local_alpha if is_local else 0.0
-
-        # Run PageRank
-        scores = self._personalized_pagerank(query_idx, alpha)
-
+        is_local = force_mode == 'local' if force_mode else self._classify_query_type(query_tweet)
+        alpha = self.config.local_alpha if is_local else 0.0
+        
+        # Create personalization vector using graph structure
+        p = self._create_personalization_vector(query_idx, is_local)
+        
+        # Run PageRank with custom personalization
+        scores = self._personalized_pagerank_with_p(p, alpha)
+        
         # Get top-k indices excluding query tweet
         top_indices = np.argsort(scores)[::-1]
         top_indices = top_indices[top_indices != query_idx][:k]
@@ -216,3 +230,38 @@ class MixPR:
         )
 
         return results
+
+    def _create_personalization_vector(
+        self,
+        query_idx: int,
+        is_local: bool
+    ) -> np.ndarray:
+        """
+        Create personalization vector incorporating conversation structure.
+        """
+        n = len(self.tweets)
+        p = np.zeros(n)
+        
+        query_tweet = self.tweets[query_idx]
+        
+        if is_local:
+            # Add weight to query tweet
+            p[query_idx] = 0.5
+            
+            # Add weight to direct conversation participants
+            if query_tweet.reply_to_tweet_id in self.tweet_id_to_idx:
+                parent_idx = self.tweet_id_to_idx[query_tweet.reply_to_tweet_id]
+                p[parent_idx] = 0.3
+                
+            # Add weight to mentioned users' recent tweets
+            mentioned_weight = 0.2 / max(len(query_tweet.metadata.mentioned_users), 1)
+            for user in query_tweet.metadata.mentioned_users:
+                user_tweets = [idx for idx, t in enumerate(self.tweets) 
+                             if t.author_id == user]
+                if user_tweets:
+                    p[user_tweets] = mentioned_weight
+        else:
+            # For global queries, use uniform distribution
+            p = np.ones(n) / n
+            
+        return p

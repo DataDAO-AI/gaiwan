@@ -137,6 +137,10 @@ class MixPRConfig:
     min_df: int = 2
     max_df: float = 0.95
     batch_size: int = 1000
+    graph_weight: float = 0.3  # Weight of graph relationships vs text similarity
+    reply_weight: float = 1.0  # Weight of reply edges
+    quote_weight: float = 0.8  # Weight of quote tweet edges
+    user_similarity_weight: float = 0.4  # Weight for user similarity edges
 
 @dataclass
 class RetrievalResult:
