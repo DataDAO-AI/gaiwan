@@ -83,7 +83,7 @@ class ArchiveProcessor:
         self.tweets_file = output_dir / "canonical_tweets.jsonl"
         self.replies_file = output_dir / "reply_edges.jsonl"
         self.processed_archives_file = output_dir / "processed_archives.txt"
-        self.processed_archives = self._load_processed_archives()
+        self.processed_archives = set()
         self.stats_manager = StatsManager(output_dir)
 
     def _load_processed_archives(self) -> Set[str]:
@@ -192,6 +192,39 @@ class ArchiveProcessor:
 
         except Exception as e:
             logger.error("Error processing %s: %s", path, str(e))
+
+    def process_archive(self, archive_path: Path) -> List[CanonicalTweet]:
+        """Process a Twitter archive directory."""
+        if archive_path in self.processed_archives:
+            logger.warning(f"Archive {archive_path} has already been processed")
+            return []
+
+        tweets = []
+        tweet_js = archive_path / "tweet.js"
+        
+        if not tweet_js.exists():
+            logger.error(f"No tweet.js found in {archive_path}")
+            return []
+
+        try:
+            with open(tweet_js) as f:
+                content = f.read()
+                # Remove JS variable assignment
+                content = content.replace("window.YTD.tweet.part0 = ", "")
+                data = json.loads(content)
+
+            # Use a default user_id for test data
+            user_id = "test_user"
+            for tweet_data in data["tweet"]:
+                tweet = CanonicalTweet.from_tweet_data(tweet_data, user_id)
+                tweets.append(tweet)
+
+            self.processed_archives.add(archive_path)
+            return tweets
+
+        except Exception as e:
+            logger.error(f"Error processing archive {archive_path}: {e}")
+            return []
 
 def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
     """Convert Twitter's timestamp format to datetime.

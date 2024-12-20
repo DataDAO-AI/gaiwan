@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional, Set
 import re
 from time import strptime, mktime
+import os
 
 @dataclass
 class TweetMetadata:
@@ -21,6 +22,14 @@ class TweetMetadata:
     def extract_from_text(cls, text: str) -> 'TweetMetadata':
         """Extract metadata from tweet text using pattern matching."""
         metadata = cls()
+        
+        # Check for retweet pattern more flexibly
+        if re.search(r'RT\s*@\w+[:\s]', text, re.IGNORECASE):  # Added re.IGNORECASE flag
+            metadata.is_retweet = True
+            rt_match = re.search(r'RT\s*@(\w+)[:\s]', text, re.IGNORECASE)
+            if rt_match:
+                metadata.retweet_of_id = rt_match.group(1)
+        
         metadata.mentioned_users.update(
             username.lower() for username in re.findall(r'@(\w+)', text)
         )
@@ -36,12 +45,6 @@ class TweetMetadata:
             if quoted_match:
                 metadata.quoted_tweet_id = quoted_match.group(1)
 
-        if text.startswith('RT @'):
-            metadata.is_retweet = True
-            rt_match = re.search(r'RT @(\w+):', text)
-            if rt_match:
-                metadata.retweet_of_id = rt_match.group(1).lower()
-
         return metadata
 
 @dataclass
@@ -49,12 +52,15 @@ class CanonicalTweet:
     """Normalized tweet representation."""
     id: str
     text: str
-    author_id: Optional[str] = None
-    created_at: Optional[datetime] = None
+    author_id: str
+    created_at: datetime
     reply_to_tweet_id: Optional[str] = None
+    metadata: TweetMetadata = field(default_factory=TweetMetadata)
+    quoted_tweet_id: Optional[str] = None
     liked_by: Set[str] = field(default_factory=set)
     source_type: str = "tweet"
-    metadata: TweetMetadata = field(default_factory=TweetMetadata)
+    media_urls: Set[str] = field(default_factory=set)
+    media_files: Set[str] = field(default_factory=set)
 
     @classmethod
     def from_tweet_data(cls, tweet_data: dict, user_id: str) -> 'CanonicalTweet':
@@ -66,7 +72,7 @@ class CanonicalTweet:
             except ValueError:
                 try:
                     time_struct = strptime(ts, "%a %b %d %H:%M:%S +0000 %Y")
-                    return datetime.fromtimestamp(mktime(time_struct), timezone.UTC)
+                    return datetime.fromtimestamp(mktime(time_struct), timezone.utc)
                 except ValueError:
                     return None
 
@@ -108,6 +114,24 @@ class CanonicalTweet:
             source_type="like"
         )
 
+    @classmethod
+    def from_archive_tweet(cls, tweet_data: dict, media_dir: str) -> 'CanonicalTweet':
+        """Enhanced factory method for archive tweets"""
+        # Basic tweet parsing
+        tweet = cls.from_tweet_data(tweet_data)
+        
+        # Add media handling
+        if 'extended_entities' in tweet_data:
+            for media in tweet_data['extended_entities'].get('media', []):
+                tweet.media_urls.add(media['media_url'])
+                
+                # Handle local files
+                media_file = os.path.join(media_dir, f"{tweet.id}_{media['id']}")
+                if os.path.exists(media_file):
+                    tweet.media_files.add(media_file)
+                    
+        return tweet
+
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
         return {
@@ -141,6 +165,8 @@ class MixPRConfig:
     reply_weight: float = 1.0  # Weight of reply edges
     quote_weight: float = 0.8  # Weight of quote tweet edges
     user_similarity_weight: float = 0.4  # Weight for user similarity edges
+    sibling_weight: float = 0.5  # Weight for sibling tweets (replies to same parent)
+    conversation_weight: float = 0.4  # Weight for conversation context vs basic similarity
 
 @dataclass
 class RetrievalResult:
