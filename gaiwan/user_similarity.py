@@ -2,12 +2,13 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, DefaultDict
 import zlib
 from collections import defaultdict
 
 import numpy as np
 from scipy import sparse
+import math
 
 from .models import CanonicalTweet
 
@@ -22,6 +23,9 @@ class UserSimilarityConfig:
     reply_weight: float = 0.8
     quote_weight: float = 0.6
     ncd_threshold: float = 0.7
+    like_weight: float = 0.5
+    retweet_weight: float = 0.4
+    conversation_weight: float = 0.3
 
 class UserSimilarityGraph:
     """Builds various user similarity graphs."""
@@ -32,13 +36,43 @@ class UserSimilarityGraph:
         self.user_tweets: Dict[str, List[CanonicalTweet]] = defaultdict(list)
         self.user_likes: Dict[str, List[CanonicalTweet]] = defaultdict(list)
         
+        # Add new tracking structures
+        self.follower_counts: Dict[str, int] = {}
+        self.following_counts: Dict[str, int] = {}
+        self.followers: Dict[str, Set[str]] = defaultdict(set)
+        self.following: Dict[str, Set[str]] = defaultdict(set)
+        self.tweet_counts: Dict[str, int] = {}
+        self.like_counts: Dict[str, int] = {}
+        self.mutual_likes: DefaultDict[Tuple[str, str], int] = defaultdict(int)
+        self.mutual_retweets: DefaultDict[Tuple[str, str], int] = defaultdict(int)
+        self.conversation_pairs: DefaultDict[Tuple[str, str], int] = defaultdict(int)
+        
     def add_tweet(self, tweet: CanonicalTweet) -> None:
         """Add a tweet to the appropriate user collections."""
         if tweet.author_id:
             self.user_tweets[tweet.author_id].append(tweet)
+            if tweet.author_id not in self.like_counts:
+                self.like_counts[tweet.author_id] = 0
+            if tweet.author_id not in self.tweet_counts:
+                self.tweet_counts[tweet.author_id] = 0
+            self.tweet_counts[tweet.author_id] += 1
+            
         for liker in tweet.liked_by:
             self.user_likes[liker].append(tweet)
+            if liker not in self.like_counts:
+                self.like_counts[liker] = 0
+            self.like_counts[liker] += 1
             
+    def add_social_data(self, user_id: str, followers: Set[str], following: Set[str],
+                       tweet_count: int, like_count: int) -> None:
+        """Add social graph data for a user."""
+        self.follower_counts[user_id] = len(followers)
+        self.following_counts[user_id] = len(following)
+        self.followers[user_id] = followers
+        self.following[user_id] = following
+        self.tweet_counts[user_id] = tweet_count
+        self.like_counts[user_id] = like_count
+
     def _compute_ncd(self, x: str, y: str) -> float:
         """Compute Normalized Compression Distance between two strings."""
         if not x or not y:
@@ -91,62 +125,117 @@ class UserSimilarityGraph:
         return sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
     
     def compute_interaction_similarity(self) -> sparse.csr_matrix:
-        """Compute similarity matrix based on mentions, replies, and quotes."""
+        """Enhanced interaction similarity incorporating more signals."""
         users = sorted(self.user_tweets.keys())
         n = len(users)
         user_to_idx = {uid: idx for idx, uid in enumerate(users)}
         
-        # Track interactions
-        mentions = defaultdict(int)
-        replies = defaultdict(int)
-        quotes = defaultdict(int)
-        
-        for tweets in self.user_tweets.values():
-            for tweet in tweets:
-                author_idx = user_to_idx.get(tweet.author_id)
-                if author_idx is None:
-                    continue
-                    
-                # Count mentions
-                for mentioned in tweet.metadata.mentioned_users:
-                    if mentioned in user_to_idx:
-                        mentions[(author_idx, user_to_idx[mentioned])] += 1
-                        
-                # Count replies
-                if tweet.reply_to_tweet_id:
-                    for t in self.user_tweets.values():
-                        for potential_parent in t:
-                            if potential_parent.id == tweet.reply_to_tweet_id:
-                                if potential_parent.author_id in user_to_idx:
-                                    replies[(author_idx, user_to_idx[potential_parent.author_id])] += 1
-                                break
-                                
-                # Count quotes
-                if tweet.metadata.quoted_tweet_id:
-                    for t in self.user_tweets.values():
-                        for potential_quoted in t:
-                            if potential_quoted.id == tweet.metadata.quoted_tweet_id:
-                                if potential_quoted.author_id in user_to_idx:
-                                    quotes[(author_idx, user_to_idx[potential_quoted.author_id])] += 1
-                                break
-        
-        # Build sparse matrix
         rows, cols, data = [], [], []
         
-        def add_symmetric_edge(i: int, j: int, weight: float) -> None:
-            rows.extend([i, j])
-            cols.extend([j, i])
-            data.extend([weight, weight])
+        for user1 in users:
+            idx1 = user_to_idx[user1]
+            if user1 not in self.like_counts:
+                self.like_counts[user1] = 0
+            if user1 not in self.tweet_counts:
+                self.tweet_counts[user1] = 0
             
-        for (i, j), count in mentions.items():
-            add_symmetric_edge(i, j, count * self.config.mention_weight)
+            for user2 in users:
+                if user1 >= user2:
+                    continue
+                    
+                idx2 = user_to_idx[user2]
+                if user2 not in self.like_counts:
+                    self.like_counts[user2] = 0
+                if user2 not in self.tweet_counts:
+                    self.tweet_counts[user2] = 0
+                
+                pair = tuple(sorted([user1, user2]))
+                
+                # Combine multiple interaction signals
+                mutual_like_strength = self.mutual_likes[pair] / math.sqrt(self.like_counts[user1] * self.like_counts[user2]) if self.like_counts[user1] and self.like_counts[user2] else 0
+                mutual_retweet_strength = self.mutual_retweets[pair] / math.sqrt(self.tweet_counts[user1] * self.tweet_counts[user2]) if self.tweet_counts[user1] and self.tweet_counts[user2] else 0
+                conversation_strength = self.conversation_pairs[pair] / math.sqrt(self.tweet_counts[user1] * self.tweet_counts[user2]) if self.tweet_counts[user1] and self.tweet_counts[user2] else 0
+                
+                strength = (
+                    mutual_like_strength * self.config.like_weight +
+                    mutual_retweet_strength * self.config.retweet_weight +
+                    conversation_strength * self.config.conversation_weight
+                )
+                
+                if strength > 0:
+                    rows.extend([idx1, idx2])
+                    cols.extend([idx2, idx1])
+                    data.extend([strength, strength])
+        
+        return sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
+    
+    def compute_temporal_similarity(self) -> sparse.csr_matrix:
+        """Compute similarity based on temporal tweeting patterns."""
+        users = sorted(self.user_tweets.keys())
+        n = len(users)
+        user_to_idx = {uid: idx for idx, uid in enumerate(users)}
+        
+        # Create temporal activity vectors (24 hours)
+        hour_vectors = np.zeros((n, 24))
+        
+        for user_id in users:
+            idx = user_to_idx[user_id]
+            for tweet in self.user_tweets[user_id]:
+                if tweet.created_at:
+                    hour_vectors[idx, tweet.created_at.hour] += 1
+                    
+        # Normalize vectors
+        row_sums = hour_vectors.sum(axis=1)
+        # Use np.where for conditional operation
+        hour_vectors = np.where(
+            row_sums[:, np.newaxis] > 0,
+            hour_vectors / row_sums[:, np.newaxis],
+            hour_vectors
+        )
+        
+        # Compute cosine similarity
+        similarity = hour_vectors @ hour_vectors.T
+        
+        return sparse.csr_matrix(similarity)
+    
+    def compute_mutual_follow_strength(self) -> sparse.csr_matrix:
+        """Compute similarity based on mutual follow relationships."""
+        users = sorted(self.user_tweets.keys())
+        n = len(users)
+        user_to_idx = {uid: idx for idx, uid in enumerate(users)}
+        
+        rows, cols, data = [], [], []
+        
+        for user1 in users:
+            idx1 = user_to_idx[user1]
+            following1 = self.following[user1]
+            followers1 = self.followers[user1]
             
-        for (i, j), count in replies.items():
-            add_symmetric_edge(i, j, count * self.config.reply_weight)
-            
-        for (i, j), count in quotes.items():
-            add_symmetric_edge(i, j, count * self.config.quote_weight)
-            
+            for user2 in users:
+                if user1 >= user2:  # Only compute once per pair
+                    continue
+                    
+                idx2 = user_to_idx[user2]
+                following2 = self.following[user2]
+                followers2 = self.followers[user2]
+                
+                # Calculate mutual follow strength
+                mutual_follows = 0
+                if user1 in followers2 and user2 in followers1:
+                    mutual_follows = 1
+                elif user1 in followers2 or user2 in followers1:
+                    mutual_follows = 0.5
+                
+                # Calculate Jaccard similarity of follow/follower networks
+                following_jaccard = len(following1 & following2) / len(following1 | following2) if following1 or following2 else 0
+                follower_jaccard = len(followers1 & followers2) / len(followers1 | followers2) if followers1 or followers2 else 0
+                
+                strength = (mutual_follows + following_jaccard + follower_jaccard) / 3
+                if strength > 0:
+                    rows.extend([idx1, idx2])
+                    cols.extend([idx2, idx1])
+                    data.extend([strength, strength])
+        
         return sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
     
     def combine_similarity_graphs(self, matrices: List[Tuple[sparse.csr_matrix, float]]) -> sparse.csr_matrix:
