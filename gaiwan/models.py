@@ -1,15 +1,15 @@
 # models.py
-"""Shared data models for Twitter archive processing."""
+"""Data models for Twitter archive processing."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Set, Optional
+from datetime import datetime, timezone
+from typing import Optional, Set
 import re
-from urllib.parse import unquote
+from time import strptime, mktime
 
 @dataclass
 class TweetMetadata:
-    """Structured metadata extracted from tweet content."""
+    """Metadata extracted from tweet content."""
     mentioned_users: Set[str] = field(default_factory=set)
     hashtags: Set[str] = field(default_factory=set)
     urls: Set[str] = field(default_factory=set)
@@ -28,7 +28,7 @@ class TweetMetadata:
             tag.lower() for tag in re.findall(r'#(\w+)', text)
         )
         metadata.urls.update(
-            unquote(url.split('?')[0]) for url in re.findall(r'https?://[^\s]+', text)
+            url.split('?')[0] for url in re.findall(r'https?://[^\s]+', text)
         )
 
         if '/status/' in text:
@@ -59,7 +59,17 @@ class CanonicalTweet:
     @classmethod
     def from_tweet_data(cls, tweet_data: dict, user_id: str) -> 'CanonicalTweet':
         """Create from raw tweet data."""
-        from archive_processor import parse_twitter_timestamp
+        def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
+            """Convert Twitter's timestamp format to datetime."""
+            try:
+                return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            except ValueError:
+                try:
+                    time_struct = strptime(ts, "%a %b %d %H:%M:%S +0000 %Y")
+                    return datetime.fromtimestamp(mktime(time_struct), timezone.UTC)
+                except ValueError:
+                    return None
+
         return cls(
             id=tweet_data['id_str'],
             author_id=user_id,
@@ -117,3 +127,19 @@ class CanonicalTweet:
                 "retweet_of_id": self.metadata.retweet_of_id
             }
         }
+
+@dataclass
+class MixPRConfig:
+    """Configuration for MixPR retrieval."""
+    local_alpha: float = 0.6
+    similarity_threshold: float = 0.27
+    max_iterations: int = 18
+    min_df: int = 2
+    max_df: float = 0.95
+    batch_size: int = 1000
+
+@dataclass
+class RetrievalResult:
+    """Represents a retrieval result with relevance score."""
+    tweet: CanonicalTweet
+    score: float
