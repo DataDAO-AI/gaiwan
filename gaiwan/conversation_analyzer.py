@@ -1,22 +1,16 @@
-# conversation_analyzer.py
 """Build and analyze conversation threads from normalized tweet data."""
 
 import argparse
+import json
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field  # Make sure this line is here
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Set, List, Optional
+from typing import Dict, List, Optional, Set
 
-try:
-    import orjson
-except ImportError:
-    raise ImportError(
-        "orjson is required. Please install it with: pip install orjson"
-    )
-
-from models import CanonicalTweet, TweetMetadata
+from .models import CanonicalTweet, TweetMetadata, MixPRConfig, RetrievalResult
+from .mixpr import MixPR
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,9 +119,14 @@ class ConversationAnalyzer:
     """Builds and analyzes conversation threads from normalized tweet data."""
 
     def __init__(self, tweets_file: Path, replies_file: Path):
+        """Initialize analyzer with data files."""
         self.tweets: Dict[str, CanonicalTweet] = {}
         self.reply_edges: Dict[str, List[str]] = defaultdict(list)
         self._load_data(tweets_file, replies_file)
+
+        # Initialize MixPR
+        self.mixpr = MixPR(MixPRConfig())
+        self.mixpr.fit(list(self.tweets.values()))
 
     def _load_data(self, tweets_file: Path, replies_file: Path) -> None:
         """Load normalized tweet and reply data."""
@@ -135,8 +134,7 @@ class ConversationAnalyzer:
         with tweets_file.open('rb') as f:
             for line in f:
                 if line.strip():
-                    tweet_data = orjson.loads(line)
-                    # Create CanonicalTweet from dict
+                    tweet_data = json.loads(line)
                     metadata = TweetMetadata(
                         mentioned_users=set(tweet_data['metadata']['mentioned_users']),
                         hashtags=set(tweet_data['metadata']['hashtags']),
@@ -168,7 +166,7 @@ class ConversationAnalyzer:
         with replies_file.open('rb') as f:
             for line in f:
                 if line.strip():
-                    edge = orjson.loads(line)
+                    edge = json.loads(line)
                     self.reply_edges[edge['parent_id']].append(edge['child_id'])
 
     def _find_root_tweet(self, tweet_id: str) -> str:
@@ -210,6 +208,19 @@ class ConversationAnalyzer:
             tweets=[self.tweets[tid] for tid in thread_tweets],
             reply_structure=reply_structure
         )
+
+    def find_related_tweets(
+        self,
+        tweet_id: str,
+        k: int = 10,
+        mode: Optional[str] = None
+    ) -> List[RetrievalResult]:
+        """Find related tweets using MixPR."""
+        if tweet_id not in self.tweets:
+            return []
+
+        query_tweet = self.tweets[tweet_id]
+        return self.mixpr.retrieve(query_tweet, k=k, force_mode=mode)
 
     def _tweet_matches_criteria(self, tweet: CanonicalTweet, criteria: SearchCriteria) -> bool:
         """Check if tweet matches search criteria."""
@@ -294,8 +305,23 @@ def main():
         type=Path,
         help="Output file for matching conversations"
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        '--related',
+        help="Find related tweets for given tweet ID"
+    )
+    parser.add_argument(
+        '--mode',
+        choices=['local', 'global'],
+        help="Force specific retrieval mode"
+    )
+    parser.add_argument(
+        '--k',
+        type=int,
+        default=10,
+        help="Number of related tweets to retrieve"
+    )
 
+    args = parser.parse_args()
     analyzer = ConversationAnalyzer(args.tweets_file, args.replies_file)
 
     if args.search:
@@ -307,8 +333,7 @@ def main():
         if args.output:
             with args.output.open('wb') as f:
                 for conv in conversations:
-                    f.write(orjson.dumps(conv.to_dict()))
-                    f.write(b'\n')
+                    f.write(json.dumps(conv.to_dict()).encode() + b'\n')
         else:
             for conv in conversations:
                 print("\nConversation:")
@@ -317,6 +342,19 @@ def main():
                     key=lambda x: x.created_at or datetime.min
                 ):
                     print(f"@{tweet.author_id}: {tweet.text}")
+
+    if args.related:
+        results = analyzer.find_related_tweets(
+            args.related,
+            k=args.k,
+            mode=args.mode
+        )
+        print(f"\nRelated tweets for {args.related}:")
+        for i, result in enumerate(results, 1):
+            print(f"\n{i}. Score: {result.score:.3f}")
+            print(f"Text: {result.tweet.text}")
+            print(f"Author: {result.tweet.author_id}")
+            print(f"Time: {result.tweet.created_at}")
 
 if __name__ == '__main__':
     main()

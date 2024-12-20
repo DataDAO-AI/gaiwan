@@ -1,19 +1,17 @@
-# archive_processor.py
 """Process Twitter archives into normalized tweet and reply data."""
 
 import argparse
 import logging
 import time
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Set, List, Optional
-from urllib.parse import urlparse, unquote
+from typing import List, Optional, Set
+import json
 
-import orjson
 import requests
 
-from models import CanonicalTweet, TweetMetadata
-from stats_collector import StatsManager
+from .models import CanonicalTweet
+from .stats_collector import StatsManager
 
 # Constants
 SUPABASE_URL = "https://fabxmporizzqflnftavs.supabase.co"
@@ -33,25 +31,37 @@ logger = logging.getLogger(__name__)
 
 class BatchWriter:
     """Efficient batch writer for large datasets."""
+
     def __init__(self, filepath: Path, batch_size: int = BATCH_SIZE):
+        """Initialize batch writer.
+
+        Args:
+            filepath: Path to output file
+            batch_size: Number of items to write at once
+        """
         self.filepath = filepath
         self.batch_size = batch_size
         self.batch = []
 
     def add(self, item: dict) -> None:
+        """Add item to batch, flushing if batch is full.
+
+        Args:
+            item: Dictionary to serialize and write
+        """
         self.batch.append(item)
         if len(self.batch) >= self.batch_size:
             self.flush()
 
     def flush(self) -> None:
+        """Write current batch to file and clear buffer."""
         if not self.batch:
             return
 
         mode = 'ab' if self.filepath.exists() else 'wb'
         with self.filepath.open(mode) as f:
             for item in self.batch:
-                f.write(orjson.dumps(item))
-                f.write(b'\n')
+                f.write(json.dumps(item).encode() + b'\n')
         self.batch.clear()
 
     def __enter__(self):
@@ -64,6 +74,11 @@ class ArchiveProcessor:
     """Processes Twitter archives into normalized tweet and reply data."""
 
     def __init__(self, output_dir: Path):
+        """Initialize processor.
+
+        Args:
+            output_dir: Directory for output files
+        """
         self.output_dir = output_dir
         self.tweets_file = output_dir / "canonical_tweets.jsonl"
         self.replies_file = output_dir / "reply_edges.jsonl"
@@ -72,6 +87,11 @@ class ArchiveProcessor:
         self.stats_manager = StatsManager(output_dir)
 
     def _load_processed_archives(self) -> Set[str]:
+        """Load set of already processed archive filenames.
+
+        Returns:
+            Set of processed archive filenames
+        """
         if self.processed_archives_file.exists():
             return set(
                 line.strip()
@@ -81,22 +101,39 @@ class ArchiveProcessor:
         return set()
 
     def _mark_archive_processed(self, path: Path) -> None:
+        """Mark archive as processed.
+
+        Args:
+            path: Path to processed archive
+        """
         with self.processed_archives_file.open('a') as f:
             f.write(f"{path.name}\n")
         self.processed_archives.add(path.name)
 
     def should_process_archive(self, path: Path) -> bool:
+        """Check if archive needs processing.
+
+        Args:
+            path: Path to archive file
+
+        Returns:
+            True if archive should be processed
+        """
         return path.name not in self.processed_archives
 
     def process_file(self, path: Path) -> None:
-        """Process a single archive file."""
+        """Process a single archive file.
+
+        Args:
+            path: Path to archive file
+        """
         if not self.should_process_archive(path):
             logger.info("Skipping already processed archive: %s", path.name)
             return
 
         try:
             with path.open('rb') as f:
-                data = orjson.loads(f.read())
+                data = json.loads(f.read())
 
             try:
                 user_id = data['account'][0]['account']['accountId']
@@ -157,19 +194,30 @@ class ArchiveProcessor:
             logger.error("Error processing %s: %s", path, str(e))
 
 def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
-    """Convert Twitter's timestamp format to datetime."""
+    """Convert Twitter's timestamp format to datetime.
+
+    Args:
+        ts: Twitter format timestamp string
+
+    Returns:
+        Parsed datetime or None if parsing fails
+    """
     try:
         return datetime.fromisoformat(ts.replace('Z', '+00:00'))
     except ValueError:
         try:
             time_struct = time.strptime(ts, "%a %b %d %H:%M:%S +0000 %Y")
-            return datetime.fromtimestamp(time.mktime(time_struct), UTC)
+            return datetime.fromtimestamp(time.mktime(time_struct), timezone.UTC)
         except ValueError:
             logger.warning("Could not parse timestamp: %s", ts)
             return None
 
 def get_all_accounts() -> List[dict]:
-    """Fetch list of all accounts from Supabase."""
+    """Fetch list of all accounts from Supabase.
+
+    Returns:
+        List of account dictionaries
+    """
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}"
@@ -189,7 +237,15 @@ def get_all_accounts() -> List[dict]:
         return []
 
 def download_archive(username: str, output_dir: Path) -> Optional[Path]:
-    """Download a Twitter archive if it doesn't exist locally."""
+    """Download a Twitter archive if it doesn't exist locally.
+
+    Args:
+        username: Twitter username
+        output_dir: Directory to save archive
+
+    Returns:
+        Path to downloaded archive or None if download fails
+    """
     username = username.lower()
     output_file = output_dir / f"{username}_archive.json"
 

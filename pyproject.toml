@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaiwan"
+version = "0.1.0"
+description = "Twitter archive analysis tools"
+requires-python = ">=3.7"
+dependencies = [
+    "orjson",
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "requests",
+]
+
+[tool.pylint.messages_control]
+disable = [
+    "C0303",  # trailing-whitespace
+    "C0301",  # line-too-long
+    "W0718",  # broad-exception-caught
+]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
