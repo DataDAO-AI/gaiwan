@@ -173,3 +173,18 @@ class RetrievalResult:
     """Represents a retrieval result with relevance score."""
     tweet: CanonicalTweet
     score: float
+
+@dataclass
+class UserSimilarityConfig:
+    """Configuration for user similarity calculations."""
+    min_tweets_per_user: int = 5
+    min_likes_per_user: int = 3
+    mention_weight: float = 0.7
+    reply_weight: float = 0.8
+    quote_weight: float = 0.6
+    like_weight: float = 0.7
+    retweet_weight: float = 0.8
+    conversation_weight: float = 0.9
+    temporal_weight: float = 0.5
+    mutual_follow_weight: float = 0.8
+    ncd_threshold: float = 0.7
