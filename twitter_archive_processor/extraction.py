@@ -7,7 +7,7 @@ import logging
 from typing import Any, Dict, Tuple, Optional
 
 from twitter_archive_processor.coretypes import MediaFile, Message, Tweet
-from twitter_archive_processor.utilities import load_json_file, process_data_for_type
+from twitter_archive_processor.utilities import load_json_file, process_data_for_type, clean_text
 from twitter_archive_processor.transformation import format_message, \
     trim_conversation_to_last_assistant
 
@@ -57,7 +57,6 @@ def get_media_type(filename: str) -> str:
         return 'video'
     else:
         return 'unknown'
-
 
 def extract_tweet(item: dict[str, Any], content_source: str, media_dir:str) -> Optional[Tweet]:
     """ extract tweet data for a single tweet """
@@ -185,3 +184,44 @@ def get_conversation_texts(contents: list[Content]) -> list[Tuple[str, str]]:
         if isinstance(content, Message):
             result.append((content.role, content.content))
     return result
+
+def extract_note_tweets(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Extract and clean Note Tweets from JSON data.
+    
+    Args:
+        data: The JSON data of a user as a Python dictionary.
+        
+    Returns:
+        A list of dictionaries, each containing cleaned Note Tweet data.
+    """
+    note_tweets = []
+
+    for note_entry in data.get("note-tweet", []):
+        note_tweet = note_entry.get("noteTweet", {})
+        core = note_tweet.get("core", {})
+
+        # Extract fields
+        note_id = note_tweet.get("noteTweetId", "")
+        created_at = note_tweet.get("createdAt", "")
+        text = core.get("text", "")
+
+        # Metadata: URLs, mentions, hashtags
+        urls = [url.get("expandedUrl", "") for url in core.get("urls", [])]
+        mentions = [mention.get("screenName", "") for mention in core.get("mentions", [])]
+        hashtags = core.get("hashtags", [])
+
+        # Clean the text
+        cleaned_text = clean_text(text)
+
+        # Append cleaned data
+        note_tweets.append({
+            "noteTweetId": note_id,
+            "createdAt": created_at,
+            "text": cleaned_text,
+            "urls": urls,
+            "mentions": mentions,
+            "hashtags": hashtags
+        })
+
+    return note_tweets

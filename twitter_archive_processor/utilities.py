@@ -13,9 +13,9 @@ from twitter_archive_processor.extraction import clean_json_string, extract_twee
 
 logger = logging.getLogger(__name__)
 
-def clean_text(text: str, entities: Optional[dict[str, any]] = None) -> str:
+def clean_text(text: str, entities: Optional[dict[str, any]] = None) -> str:  
     """ clean tweet text """
-    if entity and 'urls' in entities:
+    if entities and 'urls' in entities:
         for url_obj in entities['urls']:
             short_url = url_obj.get('url', '')
             full_url = url_obj.get('expanded_url', '')
@@ -25,10 +25,17 @@ def clean_text(text: str, entities: Optional[dict[str, any]] = None) -> str:
     text = re.sub(r'https://t.co/\w+', '', text) #t.co link removal
     text = re.sub(r'@\w+', '', text) #mentions removal
     text = re.sub(r'#\w+', '', text) #hashtags removal  May want to include this on occasion
-    text = re.sub(r'\s+', ' ', text) #extra spaces removal
-    # may want to add more cleaning steps as needed
+    text = re.sub(r'\n+', ' ', text) #Replace multiple line breaks with a single space
+    text = re.sub(r'\s+', ' ', text) #Replace multiple spaces with a single space
+    text = re.sub(r"\\'", "'", text)  # Replace escaped single quotes (\')
+    text = re.sub(r'\\"', '"', text)  # Replace escaped double quotes (\")
+    text = text.replace("\'", "'").replace('\"', '"').replace("\\'", "'").replace('\\"', '"') #Replace escaped characters
+    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>') #Replace HTML entities
+    text = text.replace('“', '"').replace('”', '"').replace('’', "'").replace('—', '-') #Uniform quotes and dashes
+    text = text.lower() #Lowercase
+    text = text.strip() #Remove leading and trailing spaces
 
-    return text.strip()
+    return text
 
 def load_json_file(file_path: str) -> any:
     """ load json data with allowances for various wrappings in data file """
