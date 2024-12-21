@@ -3,114 +3,168 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Set
+from typing import Optional, Set, List
 import re
 from time import strptime, mktime
 import os
 
 @dataclass
 class TweetMetadata:
-    """Metadata extracted from tweet content."""
+    """Metadata extracted from tweet entities."""
     mentioned_users: Set[str] = field(default_factory=set)
     hashtags: Set[str] = field(default_factory=set)
-    urls: Set[str] = field(default_factory=set)
+    urls: Set[str] = field(default_factory=set)  # Expanded URLs
     quoted_tweet_id: Optional[str] = None
     is_retweet: bool = False
     retweet_of_id: Optional[str] = None
+    media: List[dict] = field(default_factory=list)  # Raw media entities
 
     @classmethod
-    def extract_from_text(cls, text: str) -> 'TweetMetadata':
-        """Extract metadata from tweet text using pattern matching."""
+    def extract_from_text_and_entities(cls, text: str, entities: dict) -> 'TweetMetadata':
+        """Extract metadata from both tweet text and entities."""
         metadata = cls()
         
-        # Check for retweet pattern more flexibly
-        if re.search(r'RT\s*@\w+[:\s]', text, re.IGNORECASE):  # Added re.IGNORECASE flag
-            metadata.is_retweet = True
-            rt_match = re.search(r'RT\s*@(\w+)[:\s]', text, re.IGNORECASE)
-            if rt_match:
-                metadata.retweet_of_id = rt_match.group(1)
-        
-        metadata.mentioned_users.update(
-            username.lower() for username in re.findall(r'@(\w+)', text)
-        )
-        metadata.hashtags.update(
-            tag.lower() for tag in re.findall(r'#(\w+)', text)
-        )
-        metadata.urls.update(
-            url.split('?')[0] for url in re.findall(r'https?://[^\s]+', text)
-        )
+        # Extract from text first
+        if text:
+            # Check for retweet pattern
+            if re.search(r'RT\s*@\w+[:\s]', text, re.IGNORECASE):
+                metadata.is_retweet = True
+                rt_match = re.search(r'RT\s*@(\w+)[:\s]', text, re.IGNORECASE)
+                if rt_match:
+                    metadata.retweet_of_id = rt_match.group(1)
 
-        if '/status/' in text:
-            quoted_match = re.search(r'/status/(\d+)', text)
-            if quoted_match:
-                metadata.quoted_tweet_id = quoted_match.group(1)
+            # Check for quoted tweet
+            if '/status/' in text:
+                quoted_match = re.search(r'/status/(\d+)', text)
+                if quoted_match:
+                    metadata.quoted_tweet_id = quoted_match.group(1)
+
+        # Extract from entities
+        if entities:
+            # User mentions
+            for mention in entities.get('user_mentions', []):
+                metadata.mentioned_users.add(mention['screen_name'].lower())
+
+            # Hashtags
+            for tag in entities.get('hashtags', []):
+                metadata.hashtags.add(tag['text'].lower())
+
+            # URLs
+            for url in entities.get('urls', []):
+                expanded_url = url.get('expanded_url')
+                if expanded_url:
+                    metadata.urls.add(expanded_url.split('?')[0])  # Remove query params
+
+            # Media
+            metadata.media.extend(entities.get('media', []))
+
+        return metadata
+
+    @classmethod
+    def extract_from_note_core(cls, core: dict) -> 'TweetMetadata':
+        """Extract metadata from note tweet core data."""
+        metadata = cls()
+        
+        # Extract mentions
+        for mention in core.get('mentions', []):
+            metadata.mentioned_users.add(mention['screenName'].lower())
+
+        # Extract hashtags
+        for tag in core.get('hashtags', []):
+            metadata.hashtags.add(tag['text'].lower())
+
+        # Extract URLs
+        for url in core.get('urls', []):
+            expanded_url = url.get('expanded_url')
+            if expanded_url:
+                metadata.urls.add(expanded_url.split('?')[0])
 
         return metadata
 
 @dataclass
 class CanonicalTweet:
     """Normalized tweet representation."""
-    id: str
-    text: str
-    author_id: str
-    created_at: datetime
+    id: str  # id_str from tweet or noteTweetId
+    text: str  # full_text from tweet or text from noteTweet.core
+    screen_name: str  # user.screen_name or derived from archive
+    created_at: datetime  # parsed from created_at or createdAt
+    user_id: Optional[str] = None  # user.id_str when available
     reply_to_tweet_id: Optional[str] = None
     metadata: TweetMetadata = field(default_factory=TweetMetadata)
     quoted_tweet_id: Optional[str] = None
-    liked_by: Set[str] = field(default_factory=set)
-    source_type: str = "tweet"
+    liked_by: Set[str] = field(default_factory=set)  # Set of screen_names
+    source_type: str = "tweet"  # "tweet", "community_tweet", "note_tweet", or "like"
     media_urls: Set[str] = field(default_factory=set)
     media_files: Set[str] = field(default_factory=set)
+    community_id: Optional[str] = None  # Only for community tweets
 
     @classmethod
-    def from_tweet_data(cls, tweet_data: dict, user_id: str) -> 'CanonicalTweet':
-        """Create from raw tweet data."""
-        def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
-            """Convert Twitter's timestamp format to datetime."""
-            try:
-                return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            except ValueError:
-                try:
-                    time_struct = strptime(ts, "%a %b %d %H:%M:%S +0000 %Y")
-                    return datetime.fromtimestamp(mktime(time_struct), timezone.utc)
-                except ValueError:
-                    return None
+    def from_tweet_data(cls, tweet_data: dict, default_screen_name: str) -> 'CanonicalTweet':
+        """Create from regular or community tweet data."""
+        if 'tweet' in tweet_data:
+            tweet_data = tweet_data['tweet']
 
+        user_data = tweet_data.get('user', {})
+        screen_name = user_data.get('screen_name', default_screen_name).lower()
+        
         return cls(
             id=tweet_data['id_str'],
-            author_id=user_id,
+            text=tweet_data.get('full_text', tweet_data.get('text', '')),
+            screen_name=screen_name,
             created_at=parse_twitter_timestamp(tweet_data['created_at']),
-            text=tweet_data['full_text'],
+            user_id=user_data.get('id_str'),
             reply_to_tweet_id=tweet_data.get('in_reply_to_status_id_str'),
-            metadata=TweetMetadata.extract_from_text(tweet_data['full_text'])
+            metadata=TweetMetadata.extract_from_text_and_entities(
+                tweet_data.get('full_text', ''),
+                tweet_data.get('entities', {})
+            ),
+            community_id=tweet_data.get('community_id_str'),
+            source_type='community_tweet' if 'community_id_str' in tweet_data else 'tweet'
+        )
+
+    @classmethod
+    def from_note_data(cls, note_data: dict, default_screen_name: str) -> 'CanonicalTweet':
+        """Create from note tweet data."""
+        core = note_data.get('core', {})
+        return cls(
+            id=note_data['noteTweetId'],
+            text=core.get('text', ''),
+            screen_name=default_screen_name.lower(),
+            created_at=parse_twitter_timestamp(note_data['createdAt']),
+            metadata=TweetMetadata.extract_from_note_core(core),
+            source_type='note_tweet'
         )
 
     @classmethod
     def from_like_data(cls, like_data: dict, user_id: str) -> 'CanonicalTweet':
         """Create from like data."""
-        tweet_id = like_data.get('tweetId') or like_data.get('tweet_id')
-        text = like_data.get('fullText', like_data.get('full_text', ''))
-
+        # The schema shows likes are nested under a 'like' key
+        if 'like' in like_data:
+            like_data = like_data['like']
+        
+        # Schema defines exactly these fields:
+        tweet_id = like_data['tweetId']
+        text = like_data['fullText']
+        expanded_url = like_data['expandedUrl']
+        
+        # Create timestamp from URL if possible
         created_at = None
-        if 'expandedUrl' in like_data:
-            url_match = re.search(
-                r'/status/\d+/(\d{4}/\d{2}/\d{2})',
-                like_data['expandedUrl']
-            )
+        if expanded_url:
+            url_match = re.search(r'/status/\d+/(\d{4}/\d{2}/\d{2})', expanded_url)
             if url_match:
                 try:
                     created_at = datetime.strptime(
-                        url_match.group(1),
+                        url_match.group(1), 
                         '%Y/%m/%d'
-                    ).replace(tzinfo=datetime.UTC)
+                    ).replace(tzinfo=timezone.utc)
                 except ValueError:
                     pass
 
         return cls(
             id=tweet_id,
             text=text,
-            created_at=created_at,
-            liked_by={user_id},
+            screen_name=user_id.lower(),
+            created_at=created_at or datetime.now(timezone.utc),
             source_type="like"
         )
 
@@ -136,7 +190,8 @@ class CanonicalTweet:
         """Convert to dictionary for serialization."""
         return {
             "id": self.id,
-            "author_id": self.author_id,
+            "screen_name": self.screen_name,
+            "user_id": self.user_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "text": self.text,
             "reply_to_tweet_id": self.reply_to_tweet_id,
@@ -149,7 +204,10 @@ class CanonicalTweet:
                 "quoted_tweet_id": self.metadata.quoted_tweet_id,
                 "is_retweet": self.metadata.is_retweet,
                 "retweet_of_id": self.metadata.retweet_of_id
-            }
+            },
+            "media_urls": list(self.media_urls),
+            "media_files": list(self.media_files),
+            "community_id": self.community_id
         }
 
 @dataclass
@@ -188,3 +246,14 @@ class UserSimilarityConfig:
     temporal_weight: float = 0.5
     mutual_follow_weight: float = 0.8
     ncd_threshold: float = 0.7
+
+def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
+    """Convert Twitter's timestamp format to datetime."""
+    try:
+        return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+    except ValueError:
+        try:
+            time_struct = strptime(ts, "%a %b %d %H:%M:%S +0000 %Y")
+            return datetime.fromtimestamp(mktime(time_struct), timezone.utc)
+        except ValueError:
+            return None

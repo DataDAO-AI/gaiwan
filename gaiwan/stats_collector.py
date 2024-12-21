@@ -65,9 +65,36 @@ class ArchiveStats:
     first_tweet_date: Optional[datetime] = None
     last_tweet_date: Optional[datetime] = None
 
+    # Add fields for different tweet types
+    total_community_tweets: int = 0
+    total_note_tweets: int = 0
+
+    # Add media stats
+    media_counts: Counter = field(default_factory=Counter)  # type -> count
+    media_by_type: DefaultDict[str, List[dict]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
+    
+    # Add URL stats
+    urls_by_domain: Counter = field(default_factory=Counter)
+    t_co_to_expanded: Dict[str, str] = field(default_factory=dict)
+    
+    # Add community stats
+    communities: Counter = field(default_factory=Counter)
+
     def update_from_tweet(self, tweet: CanonicalTweet) -> None:
         """Update stats from a single tweet."""
-        self.total_tweets += 1
+        # Track tweet type
+        if tweet.source_type == 'tweet':
+            self.total_tweets += 1
+        elif tweet.source_type == 'community_tweet':
+            self.total_community_tweets += 1
+            if tweet.community_id:
+                self.communities[tweet.community_id] += 1
+        elif tweet.source_type == 'note':
+            self.total_note_tweets += 1
+        elif tweet.source_type == 'like':
+            self.total_likes += 1
 
         if tweet.reply_to_tweet_id:
             self.total_replies += 1
@@ -106,6 +133,12 @@ class ArchiveStats:
             except Exception:
                 continue
 
+        # Process media
+        for media in tweet.metadata.media:
+            media_type = media.get('type', 'unknown')
+            self.media_counts[media_type] += 1
+            self.media_by_type[media_type].append(media)
+
         # Update likes
         self.total_likes += len(tweet.liked_by)
 
@@ -117,7 +150,7 @@ class ArchiveStats:
             else 0
         )
 
-        return {
+        summary = {
             "tweet_counts": {
                 "total": str(self.total_tweets),
                 "replies": str(self.total_replies),
@@ -152,8 +185,42 @@ class ArchiveStats:
                 "busiest_hours": {str(k): str(v) for k, v in dict(self.tweets_by_hour.most_common(5)).items()},
                 "busiest_days": {str(k): str(v) for k, v in dict(self.tweets_by_dow.most_common()).items()},
                 "tweets_by_month": {str(k): str(v) for k, v in dict(sorted(self.tweets_by_month.items())).items()}
+            },
+            "tweet_types": {
+                "regular": str(self.total_tweets),
+                "community": str(self.total_community_tweets),
+                "notes": str(self.total_note_tweets),
+                "likes": str(self.total_likes)
+            },
+            "media_stats": {
+                "counts": {
+                    str(k): str(v) 
+                    for k, v in self.media_counts.most_common()
+                },
+                "sample_urls": {
+                    media_type: [
+                        m.get('media_url_https', m.get('media_url', ''))
+                        for m in media_list[:5]
+                    ]
+                    for media_type, media_list in self.media_by_type.items()
+                }
+            },
+            "url_stats": {
+                "top_domains": {
+                    str(k): str(v)
+                    for k, v in self.urls_by_domain.most_common(10)
+                }
+            },
+            "community_stats": {
+                "total_communities": str(len(self.communities)),
+                "top_communities": {
+                    str(k): str(v)
+                    for k, v in self.communities.most_common(10)
+                }
             }
         }
+
+        return summary
 
 @dataclass
 class ExportConfig:
@@ -162,37 +229,97 @@ class ExportConfig:
     media_dir: Optional[Path] = None
     
 class StatsManager:
-    """Manages collection and storage of archive statistics."""
-
+    """Collects and manages statistics about processed archives."""
+    
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
-        self.stats_dir = output_dir / "stats"
-        self.stats_dir.mkdir(parents=True, exist_ok=True)
-
-    def _write_stats(self, archive_name: str, stats: ArchiveStats) -> None:
-        """Write stats to JSON file."""
-        stats_file = self.stats_dir / f"{archive_name}_stats.json"
-        with open(stats_file, 'w') as f:
-            json.dump(stats.generate_summary(), f, indent=2)
-
-    def process_archive(self, archive_path: Path, tweets: List[CanonicalTweet]) -> None:
-        """Enhanced archive processing"""
-        stats = ArchiveStats()
+        self.current_stats = {}
         
-        # Process tweets
-        for tweet in tweets:
-            stats.update_from_tweet(tweet)
+    def process_tweet(self, tweet: CanonicalTweet) -> None:
+        """Process a tweet and update statistics."""
+        username = tweet.screen_name
+        if username not in self.current_stats:
+            self.current_stats[username] = {
+                "tweet_count": 0,
+                "reply_count": 0,
+                "retweet_count": 0,
+                "quote_count": 0,
+                "like_count": 0,
+                "media_count": 0,
+                "hashtag_count": 0,
+                "mention_count": 0,
+                "url_count": 0,
+                "first_tweet_at": None,
+                "last_tweet_at": None,
+                "hashtags": set(),
+                "mentioned_users": set(),
+                "domains": set()
+            }
             
-            # Track conversation threads
-            if tweet.reply_to_tweet_id:
-                stats.conversation_participants[tweet.reply_to_tweet_id].add(tweet.author_id)
+        stats = self.current_stats[username]
+        stats["tweet_count"] += 1
+        
+        if tweet.reply_to_tweet_id:
+            stats["reply_count"] += 1
+            
+        if tweet.metadata.is_retweet:
+            stats["retweet_count"] += 1
+            
+        if tweet.metadata.quoted_tweet_id:
+            stats["quote_count"] += 1
+            
+        if tweet.source_type == "like":
+            stats["like_count"] += 1
+            
+        stats["media_count"] += len(tweet.media_urls)
+        stats["hashtag_count"] += len(tweet.metadata.hashtags)
+        stats["mention_count"] += len(tweet.metadata.mentioned_users)
+        stats["url_count"] += len(tweet.metadata.urls)
+        
+        # Update timestamp ranges
+        if tweet.created_at:
+            if not stats["first_tweet_at"] or tweet.created_at < stats["first_tweet_at"]:
+                stats["first_tweet_at"] = tweet.created_at
+            if not stats["last_tweet_at"] or tweet.created_at > stats["last_tweet_at"]:
+                stats["last_tweet_at"] = tweet.created_at
                 
-            # Track media usage
-            if tweet.media_files:
-                stats.media_usage[tweet.author_id] += len(tweet.media_files)
-                
-        # Write stats
-        self._write_stats(archive_path.stem, stats)
+        # Update sets
+        stats["hashtags"].update(tweet.metadata.hashtags)
+        stats["mentioned_users"].update(tweet.metadata.mentioned_users)
+        stats["domains"].update(
+            self._extract_domain(url) for url in tweet.metadata.urls
+        )
+        
+    def save_stats(self, username: str) -> None:
+        """Save statistics for a user to a file."""
+        if username not in self.current_stats:
+            return
+            
+        stats = self.current_stats[username]
+        # Convert sets to lists for JSON serialization
+        stats_copy = stats.copy()
+        stats_copy["hashtags"] = list(stats["hashtags"])
+        stats_copy["mentioned_users"] = list(stats["mentioned_users"])
+        stats_copy["domains"] = list(stats["domains"])
+        
+        # Convert timestamps to ISO format
+        if stats_copy["first_tweet_at"]:
+            stats_copy["first_tweet_at"] = stats_copy["first_tweet_at"].isoformat()
+        if stats_copy["last_tweet_at"]:
+            stats_copy["last_tweet_at"] = stats_copy["last_tweet_at"].isoformat()
+            
+        output_file = self.output_dir / f"{username}_archive_stats.json"
+        with output_file.open('w') as f:
+            json.dump(stats_copy, f, indent=2)
+            
+    @staticmethod
+    def _extract_domain(url: str) -> str:
+        """Extract domain from URL."""
+        try:
+            from urllib.parse import urlparse
+            return urlparse(url).netloc
+        except:
+            return url
 
     def generate_aggregate_stats(self) -> dict:
         """Generate aggregate statistics across all processed archives."""

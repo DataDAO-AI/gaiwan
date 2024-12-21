@@ -10,8 +10,8 @@ import json
 
 import requests
 
-from .models import CanonicalTweet
-from .stats_collector import StatsManager
+from gaiwan.models import CanonicalTweet
+from gaiwan.stats_collector import StatsManager
 
 # Constants
 SUPABASE_URL = "https://fabxmporizzqflnftavs.supabase.co"
@@ -121,77 +121,81 @@ class ArchiveProcessor:
         """
         return path.name not in self.processed_archives
 
-    def process_file(self, path: Path) -> None:
-        """Process a single archive file.
-
-        Args:
-            path: Path to archive file
-        """
-        if not self.should_process_archive(path):
-            logger.info("Skipping already processed archive: %s", path.name)
-            return
-
+    def process_file(self, archive_path: Path) -> List[CanonicalTweet]:
+        """Process a single archive file."""
         try:
-            with path.open('rb') as f:
-                data = json.loads(f.read())
-
-            try:
-                user_id = data['account'][0]['account']['accountId']
-            except (KeyError, IndexError) as e:
-                logger.error("Could not find user ID in %s: %s", path, str(e))
-                return
-
-            tweets_writer = BatchWriter(self.tweets_file)
-            replies_writer = BatchWriter(self.replies_file)
-            processed_tweets = []
-
-            # Process regular tweets
-            for tweet_container in data.get('tweets', []):
-                tweet_data = tweet_container.get('tweet', {})
-                if tweet_data:
-                    tweet = CanonicalTweet.from_tweet_data(tweet_data, user_id)
-                    tweets_writer.add(tweet.to_dict())
-                    processed_tweets.append(tweet)
-
-                    if tweet.reply_to_tweet_id:
-                        replies_writer.add({
-                            "parent_id": tweet.reply_to_tweet_id,
-                            "child_id": tweet.id
-                        })
-
-            # Process community tweets
-            for tweet_container in data.get('community-tweet', []):
-                tweet_data = tweet_container.get('tweet', {})
-                if tweet_data:
-                    tweet = CanonicalTweet.from_tweet_data(tweet_data, user_id)
-                    tweets_writer.add(tweet.to_dict())
-                    processed_tweets.append(tweet)
-
-                    if tweet.reply_to_tweet_id:
-                        replies_writer.add({
-                            "parent_id": tweet.reply_to_tweet_id,
-                            "child_id": tweet.id
-                        })
-
-            # Process likes
-            for like_container in data.get('like', []):
-                like_data = like_container.get('like', {})
-                if like_data:
-                    tweet = CanonicalTweet.from_like_data(like_data, user_id)
-                    tweets_writer.add(tweet.to_dict())
-                    processed_tweets.append(tweet)
-
-            tweets_writer.flush()
-            replies_writer.flush()
-
-            # Generate stats for this archive
-            self.stats_manager.process_archive(path, processed_tweets)
-
-            self._mark_archive_processed(path)
-            logger.info("Successfully processed archive: %s", path.name)
-
+            # Extract username from filename
+            username = archive_path.stem.split('_')[0]
+            logger.info(f"Processing archive for {username}")
+            
+            with open(archive_path) as f:
+                data = json.load(f)
+                
+            tweets = []
+            stats = {
+                'tweets': 0,
+                'community_tweets': 0,
+                'note_tweets': 0,
+                'likes': 0
+            }
+            
+            # Handle regular tweets
+            if 'tweet' in data:
+                tweet_list = data['tweet']
+                if isinstance(tweet_list, dict):
+                    tweet_list = [tweet_list]
+                    
+                for tweet_data in tweet_list:
+                    tweet = CanonicalTweet.from_tweet_data(tweet_data, username)
+                    tweets.append(tweet)
+                    self.stats_manager.process_tweet(tweet)
+                    if tweet.source_type == 'community_tweet':
+                        stats['community_tweets'] += 1
+                    else:
+                        stats['tweets'] += 1
+                    
+            # Handle note tweets
+            if 'noteTweet' in data:
+                note_list = data['noteTweet']
+                if isinstance(note_list, dict):
+                    note_list = [note_list]
+                    
+                for note_data in note_list:
+                    tweet = CanonicalTweet.from_note_data(note_data, username)
+                    tweets.append(tweet)
+                    self.stats_manager.process_tweet(tweet)
+                    stats['note_tweets'] += 1
+                    
+            # Handle likes
+            if 'like' in data:
+                like_list = data['like']
+                if isinstance(like_list, dict):
+                    like_list = [like_list]
+                    
+                for like_entry in like_list:
+                    if 'like' in like_entry:
+                        tweet = CanonicalTweet.from_like_data(like_entry, username)
+                        tweets.append(tweet)
+                        self.stats_manager.process_tweet(tweet)
+                        stats['likes'] += 1
+            
+            # Log summary statistics
+            logger.info(
+                f"Processed {username} archive: "
+                f"{stats['tweets']} tweets, "
+                f"{stats['community_tweets']} community tweets, "
+                f"{stats['note_tweets']} note tweets, "
+                f"{stats['likes']} likes"
+            )
+            
+            # Save stats after processing all tweets
+            self.stats_manager.save_stats(username)
+            self._mark_archive_processed(archive_path)
+            return tweets
+            
         except Exception as e:
-            logger.error("Error processing %s: %s", path, str(e))
+            logger.error(f"Error processing {archive_path}: {e}")
+            return []
 
     def process_archive(self, archive_path: Path) -> List[CanonicalTweet]:
         """Process a Twitter archive directory."""
@@ -209,14 +213,42 @@ class ArchiveProcessor:
         try:
             with open(tweet_js) as f:
                 content = f.read()
-                # Remove JS variable assignment
-                content = content.replace("window.YTD.tweet.part0 = ", "")
+                logger.debug(f"Raw content: {content[:100]}...")  
+                
+                # Remove JS variable assignment more carefully
+                if content.startswith("window.YTD.tweet.part0 = "):
+                    content = content[len("window.YTD.tweet.part0 = "):]
+                    logger.debug("Removed JS prefix")
+                else:
+                    logger.debug("No JS prefix found")
+                    
                 data = json.loads(content)
+                logger.debug(f"Parsed data type: {type(data)}")
+                logger.debug(f"Parsed data: {data}")
 
-            # Use a default user_id for test data
-            user_id = "test_user"
-            for tweet_data in data["tweet"]:
-                tweet = CanonicalTweet.from_tweet_data(tweet_data, user_id)
+            # Handle both direct list and dict with 'tweet' key
+            if isinstance(data, dict) and 'tweet' in data:
+                tweet_list = data['tweet']
+            elif isinstance(data, list):
+                tweet_list = data
+            else:
+                logger.error(f"Unexpected data structure: {type(data)}")
+                return []
+
+            # Try to get username from the first tweet
+            try:
+                first_tweet = tweet_list[0]
+                if isinstance(first_tweet, dict) and 'tweet' in first_tweet:
+                    first_tweet = first_tweet['tweet']
+                username = first_tweet['user']['screen_name'].lower()
+            except (IndexError, KeyError):
+                username = archive_path.stem.replace('_archive', '').lower()
+                logger.warning(f"Could not find username in {archive_path}, using filename: {username}")
+
+            for tweet_data in data:
+                if not isinstance(tweet_data, dict) or 'tweet' not in tweet_data:
+                    continue
+                tweet = CanonicalTweet.from_tweet_data(tweet_data['tweet'], username)
                 tweets.append(tweet)
 
             self.processed_archives.add(archive_path)

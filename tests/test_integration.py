@@ -49,9 +49,13 @@ def sample_archive_path(tmp_path) -> Path:
 
 def test_end_to_end_processing(
     sample_archive_path: Path,
-    tmp_path: Path
+    tmp_path: Path,
+    caplog  # Add pytest caplog fixture
 ):
     """Test full archive processing pipeline."""
+    # Set logging level to DEBUG for this test
+    caplog.set_level(logging.DEBUG)
+    
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     
@@ -61,6 +65,11 @@ def test_end_to_end_processing(
     
     # Process archive
     tweets = processor.process_archive(sample_archive_path)
+    
+    # Print debug info
+    print("\nDebug logs:")
+    for record in caplog.records:
+        print(f"{record.levelname}: {record.message}")
     
     # Generate stats
     stats_manager.process_archive(sample_archive_path, tweets)
