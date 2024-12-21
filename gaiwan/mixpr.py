@@ -3,7 +3,7 @@
 import logging
 import re
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 
 import numpy as np
 from scipy import sparse
@@ -21,8 +21,8 @@ class MixPR:
         """Initialize MixPR with configuration."""
         self.config = config
         self.vectorizer = TfidfVectorizer(
-            min_df=config.min_df,
-            max_df=config.max_df,
+            min_df=1,
+            max_df=1.0,
             strip_accents='unicode',
             analyzer='word',
             token_pattern=r'\b\w+\b',
@@ -34,6 +34,7 @@ class MixPR:
         self.tweet_id_to_idx: Dict[str, int] = {}
         self.embeddings: Optional[sparse.csr_matrix] = None
         self.adjacency_matrix: Optional[sparse.csr_matrix] = None
+        self.user_similarity_matrix = None
 
     def _preprocess_text(self, text: str) -> str:
         """
@@ -189,47 +190,39 @@ class MixPR:
 
         return has_question or is_reply or has_mentions
 
-    def retrieve(
-        self,
-        query_tweet: CanonicalTweet,
-        k: int = 10,
-        force_mode: Optional[str] = None
-    ) -> List[RetrievalResult]:
-        """Modified retrieve method"""
-        query_idx = self.tweet_id_to_idx[query_tweet.id]
+    def retrieve(self, query_tweet: CanonicalTweet, k: int = 10) -> List[RetrievalResult]:
+        """Enhanced retrieval using conversation context"""
+        n = len(self.tweets)  # Get total number of tweets
         
-        # Determine retrieval mode
-        is_local = force_mode == 'local' if force_mode else self._classify_query_type(query_tweet)
-        alpha = self.config.local_alpha if is_local else 0.0
+        # Get basic similarity scores and convert to dense array
+        basic_scores = np.asarray(self._compute_basic_similarity(query_tweet)).flatten()
         
-        # Create personalization vector using graph structure
-        p = self._create_personalization_vector(query_idx, is_local)
-        
-        # Run PageRank with custom personalization
-        scores = self._personalized_pagerank_with_p(p, alpha)
-        
-        # Get top-k indices excluding query tweet
-        top_indices = np.argsort(scores)[::-1]
-        top_indices = top_indices[top_indices != query_idx][:k]
-
-        # Create results
-        results = [
-            RetrievalResult(
-                tweet=self.tweets[idx],
-                score=float(scores[idx])
+        # Add conversation context
+        if query_tweet.id in self.tweet_id_to_idx:
+            query_idx = self.tweet_id_to_idx[query_tweet.id]
+            conversation_context = self._compute_conversation_context(query_idx)
+            
+            # Convert sparse matrix to dense array and ensure correct shape
+            context_scores = np.asarray(conversation_context.toarray()).flatten()
+            
+            # Ensure both arrays have the same shape
+            if len(basic_scores) != len(context_scores):
+                # Pad the shorter array with zeros
+                if len(basic_scores) < n:
+                    basic_scores = np.pad(basic_scores, (0, n - len(basic_scores)))
+                if len(context_scores) < n:
+                    context_scores = np.pad(context_scores, (0, n - len(context_scores)))
+            
+            # Combine scores
+            final_scores = (
+                (1 - self.config.conversation_weight) * basic_scores +
+                self.config.conversation_weight * context_scores
             )
-            for idx in top_indices
-        ]
-
-        # Sort by score groups then time
-        results.sort(
-            key=lambda x: (
-                round(x.score, 3),
-                x.tweet.created_at or datetime.min
-            )
-        )
-
-        return results
+        else:
+            final_scores = basic_scores
+            
+        # Return top results
+        return self._get_top_results(final_scores, k, exclude_ids={query_tweet.id})
 
     def _create_personalization_vector(
         self,
@@ -265,3 +258,63 @@ class MixPR:
             p = np.ones(n) / n
             
         return p
+
+    def _compute_conversation_context(self, tweet_idx: int) -> sparse.csr_matrix:
+        """Compute conversation context matrix"""
+        n = len(self.tweets)
+        context_matrix = sparse.lil_matrix((n, n))  # Ensure matrix is n x n
+        
+        tweet = self.tweets[tweet_idx]
+        
+        # Add reply chain context
+        if tweet.reply_to_tweet_id in self.tweet_id_to_idx:
+            parent_idx = self.tweet_id_to_idx[tweet.reply_to_tweet_id]
+            context_matrix[tweet_idx, parent_idx] = self.config.reply_weight
+            
+            # Find siblings (other replies to same tweet)
+            for idx, other_tweet in enumerate(self.tweets):
+                if other_tweet.reply_to_tweet_id == tweet.reply_to_tweet_id:
+                    context_matrix[tweet_idx, idx] = self.config.sibling_weight
+                    
+        # Convert to CSR format and ensure it's a vector
+        return context_matrix.tocsr()[tweet_idx]  # Return just the row for tweet_idx
+
+    def _compute_basic_similarity(self, query_tweet: CanonicalTweet) -> np.ndarray:
+        """Compute basic similarity scores between query and all tweets."""
+        query_vec = self.vectorizer.transform([query_tweet.text])
+        return (query_vec @ self.embeddings.T).toarray().flatten()
+
+    def _get_top_results(self, scores: np.ndarray, k: int, exclude_ids: Set[str] = None) -> List[RetrievalResult]:
+        """Get top k results from similarity scores."""
+        if exclude_ids is None:
+            exclude_ids = set()
+        
+        # Ensure scores is a 1D numpy array
+        scores = np.asarray(scores).flatten()
+        
+        # Get indices of tweets not in exclude_ids
+        valid_indices = [
+            i for i, tweet in enumerate(self.tweets)
+            if tweet.id not in exclude_ids
+        ]
+        
+        if not valid_indices:
+            return []
+        
+        # Get scores for valid indices
+        valid_scores = scores[valid_indices]
+        
+        # Get top k indices
+        k = min(k, len(valid_indices))
+        top_k_indices = np.argsort(valid_scores)[-k:][::-1]
+        
+        # Convert to RetrievalResult objects
+        results = []
+        for idx in top_k_indices:
+            tweet_idx = valid_indices[idx]
+            results.append(RetrievalResult(
+                tweet=self.tweets[tweet_idx],
+                score=float(valid_scores[idx])
+            ))
+        
+        return results
