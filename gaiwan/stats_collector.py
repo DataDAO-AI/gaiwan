@@ -10,8 +10,9 @@ from urllib.parse import urlparse
 
 import orjson
 import logging
+import json
 
-from models import CanonicalTweet
+from gaiwan.models import CanonicalTweet
 
 logger = logging.getLogger(__name__)
 
@@ -118,42 +119,48 @@ class ArchiveStats:
 
         return {
             "tweet_counts": {
-                "total": self.total_tweets,
-                "replies": self.total_replies,
-                "retweets": self.total_retweets,
-                "quotes": self.total_quotes,
-                "original": (
+                "total": str(self.total_tweets),
+                "replies": str(self.total_replies),
+                "retweets": str(self.total_retweets),
+                "quotes": str(self.total_quotes),
+                "original": str(
                     self.total_tweets - self.total_replies
                     - self.total_retweets - self.total_quotes
                 ),
-                "total_likes": self.total_likes
+                "total_likes": str(self.total_likes)
             },
             "activity_period": {
                 "first_tweet": self.first_tweet_date.isoformat() if self.first_tweet_date else None,
                 "last_tweet": self.last_tweet_date.isoformat() if self.last_tweet_date else None,
-                "active_days": active_days,
-                "tweets_per_day": round(self.total_tweets / active_days, 2) if active_days else 0
+                "active_days": str(active_days),
+                "tweets_per_day": str(round(self.total_tweets / active_days, 2) if active_days else 0)
             },
             "content_metrics": {
-                "avg_tweet_length": round(sum(self.tweet_lengths) / len(self.tweet_lengths), 2) if self.tweet_lengths else 0,
-                "top_hashtags": dict(self.hashtag_usage.most_common(10)),
-                "top_domains": dict(self.domains_shared.most_common(10)),
-                "top_mentioned_users": dict(self.mentioned_users.most_common(10))
+                "avg_tweet_length": str(round(sum(self.tweet_lengths) / len(self.tweet_lengths), 2) if self.tweet_lengths else 0),
+                "top_hashtags": {str(k): str(v) for k, v in dict(self.hashtag_usage.most_common(10)).items()},
+                "top_domains": {str(k): str(v) for k, v in dict(self.domains_shared.most_common(10)).items()},
+                "top_mentioned_users": {str(k): str(v) for k, v in dict(self.mentioned_users.most_common(10)).items()}
             },
             "engagement_metrics": {
-                "total_likes_received": sum(self.likes_received.values()),
-                "total_retweets_received": sum(self.retweets_received.values()),
-                "avg_likes_per_tweet": round(
+                "total_likes_received": str(sum(self.likes_received.values())),
+                "total_retweets_received": str(sum(self.retweets_received.values())),
+                "avg_likes_per_tweet": str(round(
                     sum(self.likes_received.values()) / self.total_tweets, 2
-                ) if self.total_tweets else 0
+                ) if self.total_tweets else 0)
             },
             "temporal_patterns": {
-                "busiest_hours": dict(self.tweets_by_hour.most_common(5)),
-                "busiest_days": dict(self.tweets_by_dow.most_common()),
-                "tweets_by_month": dict(sorted(self.tweets_by_month.items()))
+                "busiest_hours": {str(k): str(v) for k, v in dict(self.tweets_by_hour.most_common(5)).items()},
+                "busiest_days": {str(k): str(v) for k, v in dict(self.tweets_by_dow.most_common()).items()},
+                "tweets_by_month": {str(k): str(v) for k, v in dict(sorted(self.tweets_by_month.items())).items()}
             }
         }
 
+@dataclass
+class ExportConfig:
+    """Configuration for stats export"""
+    formats: Set[str] = field(default_factory=lambda: {'json', 'markdown'})
+    media_dir: Optional[Path] = None
+    
 class StatsManager:
     """Manages collection and storage of archive statistics."""
 
@@ -162,19 +169,30 @@ class StatsManager:
         self.stats_dir = output_dir / "stats"
         self.stats_dir.mkdir(parents=True, exist_ok=True)
 
-    def process_archive(self, archive_path: Path, tweets: List[CanonicalTweet]) -> None:
-        """Process an archive and generate statistics."""
-        stats = ArchiveStats()
+    def _write_stats(self, archive_name: str, stats: ArchiveStats) -> None:
+        """Write stats to JSON file."""
+        stats_file = self.stats_dir / f"{archive_name}_stats.json"
+        with open(stats_file, 'w') as f:
+            json.dump(stats.generate_summary(), f, indent=2)
 
+    def process_archive(self, archive_path: Path, tweets: List[CanonicalTweet]) -> None:
+        """Enhanced archive processing"""
+        stats = ArchiveStats()
+        
+        # Process tweets
         for tweet in tweets:
             stats.update_from_tweet(tweet)
-
-        # Write individual archive stats
-        stats_file = self.stats_dir / f"{archive_path.stem}_stats.json"
-        with stats_file.open('wb') as f:
-            f.write(orjson.dumps(stats.generate_summary()))
-
-        logger.info(f"Generated stats for {archive_path.stem}: {stats.total_tweets} tweets processed")
+            
+            # Track conversation threads
+            if tweet.reply_to_tweet_id:
+                stats.conversation_participants[tweet.reply_to_tweet_id].add(tweet.author_id)
+                
+            # Track media usage
+            if tweet.media_files:
+                stats.media_usage[tweet.author_id] += len(tweet.media_files)
+                
+        # Write stats
+        self._write_stats(archive_path.stem, stats)
 
     def generate_aggregate_stats(self) -> dict:
         """Generate aggregate statistics across all processed archives."""
@@ -193,3 +211,31 @@ class StatsManager:
                 continue
 
         return aggregate_stats.generate_summary()
+
+    def export_analysis(self, config: ExportConfig) -> None:
+        """Export analysis in multiple formats"""
+        if 'markdown' in config.formats:
+            self._export_markdown(config)
+            
+        if 'json' in config.formats:
+            self._export_json(config)
+    
+    def _export_markdown(self, config: ExportConfig) -> None:
+        """Export analysis as markdown"""
+        for archive_name, stats in self.archive_stats.items():
+            output_path = self.output_dir / f"{archive_name}_analysis.md"
+            
+            with output_path.open('w') as f:
+                f.write(f"# Analysis: {archive_name}\n\n")
+                
+                # Basic stats
+                f.write("## Overview\n")
+                f.write(f"Total Tweets: {stats.total_tweets}\n")
+                f.write(f"Conversation Threads: {len(stats.conversation_participants)}\n")
+                
+                # Add media gallery if configured
+                if config.media_dir:
+                    f.write("\n## Media Gallery\n")
+                    for tweet in stats.tweets_with_media:
+                        for media_file in tweet.media_files:
+                            f.write(f"![{media_file}]({media_file})\n")
