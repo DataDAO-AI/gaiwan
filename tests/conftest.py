@@ -1,38 +1,73 @@
 """Common test fixtures and configuration."""
 
+import json
+from datetime import datetime
+from pathlib import Path
 import pytest
-from datetime import datetime, timezone
 from gaiwan.models import CanonicalTweet, TweetMetadata, MixPRConfig
 from gaiwan.user_similarity import UserSimilarityConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 @pytest.fixture
 def sample_tweets():
-    """Create a set of interconnected sample tweets for testing."""
-    tweets = [
+    """Create sample tweets for testing."""
+    metadata = TweetMetadata(
+        mentioned_users={'user2'},
+        hashtags=set(),
+        urls=set(),
+        quoted_tweet_id=None,
+        is_retweet=False,
+        retweet_of_id=None,
+        media=[]
+    )
+
+    return [
         CanonicalTweet(
-            id="1",
-            text="Hello world! @user2 check this out",
-            author_id="user1",
-            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            metadata=TweetMetadata.extract_from_text("Hello world! @user2 check this out")
-        ),
-        CanonicalTweet(
-            id="2",
-            text="@user1 Nice tweet! #testing",
-            author_id="user2",
-            created_at=datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
-            reply_to_tweet_id="1",
-            metadata=TweetMetadata.extract_from_text("@user1 Nice tweet! #testing")
-        ),
-        CanonicalTweet(
-            id="3",
-            text="Interesting discussion https://example.com",
-            author_id="user3",
-            created_at=datetime(2024, 1, 1, 2, tzinfo=timezone.utc),
-            metadata=TweetMetadata.extract_from_text("Interesting discussion https://example.com")
+            id='1',
+            text='Hello world! @user2 check this out',
+            author_id='user1',
+            created_at=datetime(2024, 1, 1, 12, 0),
+            metadata=metadata,
+            reply_to_tweet_id=None,
+            liked_by=set(),
+            source_type='tweet'
         )
     ]
-    return tweets
+
+@pytest.fixture
+def sample_archive_path(tmp_path) -> Path:
+    """Create a sample archive for testing."""
+    archive_dir = tmp_path / "sample_archive"
+    archive_dir.mkdir()
+    
+    # Create tweet.js with proper structure
+    tweet_data = [  # Direct list of tweet objects
+        {
+            "tweet": {
+                "id_str": "1",
+                "full_text": "Test tweet",
+                "created_at": "Fri Sep 27 16:17:03 +0000 2024",
+                "user": {
+                    "screen_name": "test_user",
+                    "id_str": "123"
+                },
+                "entities": {
+                    "user_mentions": [],
+                    "hashtags": [],
+                    "urls": [],
+                    "media": []
+                }
+            }
+        }
+    ]
+    
+    tweet_js = archive_dir / "tweet.js"
+    tweet_js.write_text("window.YTD.tweet.part0 = " + json.dumps(tweet_data))
+    logger.debug(f"Writing test data: {tweet_data}")
+    
+    return archive_dir
 
 @pytest.fixture
 def mixpr_config():
@@ -52,12 +87,18 @@ def mixpr_config():
 
 @pytest.fixture
 def user_similarity_config():
-    """Create a UserSimilarity configuration for testing."""
+    """Create test configuration for user similarity."""
     return UserSimilarityConfig(
         min_tweets_per_user=2,
         min_likes_per_user=1,
         mention_weight=0.7,
         reply_weight=0.8,
         quote_weight=0.6,
-        ncd_threshold=0.7
+        ncd_threshold=0.7,
+        like_weight=0.5,
+        retweet_weight=0.4,
+        conversation_weight=0.3,
+        community_weight=0.6,
+        media_weight=0.4,
+        url_weight=0.5
     ) 

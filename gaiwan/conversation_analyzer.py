@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+from urllib.parse import urlparse
 
 from .models import CanonicalTweet, TweetMetadata, MixPRConfig, RetrievalResult
 from .mixpr import MixPR
@@ -35,14 +36,29 @@ class ConversationThread:
                     "author_id": t.author_id,
                     "text": t.text,
                     "created_at": t.created_at.isoformat() if t.created_at else None,
-                    "level": self._get_tweet_level(t.id)
+                    "level": self._get_tweet_level(t.id),
+                    "source_type": t.source_type,
+                    "community_id": t.community_id,
+                    "metadata": {
+                        "urls": [
+                            {
+                                "expanded_url": url,
+                                "domain": urlparse(url).netloc
+                            }
+                            for url in t.metadata.urls
+                        ],
+                        "media": t.metadata.media,
+                        "mentioned_users": list(t.metadata.mentioned_users),
+                        "hashtags": list(t.metadata.hashtags)
+                    }
                 }
                 for t in sorted(
                     self.tweets,
                     key=lambda x: x.created_at or datetime.min
                 )
             ],
-            "reply_structure": self.reply_structure
+            "reply_structure": self.reply_structure,
+            "community_context": self._get_community_context()
         }
 
     def _get_tweet_level(self, tweet_id: str) -> int:
@@ -61,6 +77,21 @@ class ConversationThread:
                 break
         return level
 
+    def _get_community_context(self) -> dict:
+        """Get community-specific context if any tweets are community tweets."""
+        community_tweets = [
+            t for t in self.tweets 
+            if t.source_type == 'community_tweet' and t.community_id
+        ]
+        if not community_tweets:
+            return {}
+            
+        communities = set(t.community_id for t in community_tweets)
+        return {
+            "communities": list(communities),
+            "community_tweet_count": len(community_tweets)
+        }
+
 @dataclass
 class SearchCriteria:
     """Encapsulates conversation search criteria."""
@@ -76,6 +107,10 @@ class SearchCriteria:
     min_replies: Optional[int] = None
     min_likes: Optional[int] = None
     has_links: Optional[bool] = None
+    source_types: Set[str] = field(default_factory=set)  # tweet, community_tweet, note
+    communities: Set[str] = field(default_factory=set)
+    has_media: Optional[bool] = None
+    media_types: Set[str] = field(default_factory=set)
 
     @classmethod
     def from_query(cls, query: str) -> 'SearchCriteria':
@@ -108,6 +143,16 @@ class SearchCriteria:
                 criteria.exclude_words.add(term[1:])
             elif term == 'filter:links':
                 criteria.has_links = True
+            elif term == 'is:community':
+                criteria.source_types.add('community_tweet')
+            elif term == 'is:note':
+                criteria.source_types.add('note')
+            elif term.startswith('community:'):
+                criteria.communities.add(term[10:])
+            elif term == 'has:media':
+                criteria.has_media = True
+            elif term.startswith('media:'):
+                criteria.media_types.add(term[6:])
             else:
                 criteria.contains_words.add(term)
 
@@ -213,14 +258,31 @@ class ConversationAnalyzer:
         self,
         tweet_id: str,
         k: int = 10,
-        mode: Optional[str] = None
+        mode: Optional[str] = None,
+        source_types: Optional[Set[str]] = None
     ) -> List[RetrievalResult]:
-        """Find related tweets using MixPR."""
+        """Find related tweets using MixPR.
+        
+        Args:
+            tweet_id: ID of query tweet
+            k: Number of results to return
+            mode: Retrieval mode (local/global)
+            source_types: Optional set of tweet types to consider
+        """
         if tweet_id not in self.tweets:
             return []
 
         query_tweet = self.tweets[tweet_id]
-        return self.mixpr.retrieve(query_tweet, k=k, force_mode=mode)
+        results = self.mixpr.retrieve(query_tweet, k=k, force_mode=mode)
+        
+        # Filter by source type if specified
+        if source_types:
+            results = [
+                r for r in results
+                if r.tweet.source_type in source_types
+            ]
+            
+        return results[:k]
 
     def _tweet_matches_criteria(self, tweet: CanonicalTweet, criteria: SearchCriteria) -> bool:
         """Check if tweet matches search criteria."""
@@ -269,6 +331,25 @@ class ConversationAnalyzer:
 
         if criteria.has_links is not None and bool(tweet.metadata.urls) != criteria.has_links:
             return False
+
+        if criteria.source_types and tweet.source_type not in criteria.source_types:
+            return False
+            
+        if criteria.communities and (
+            tweet.source_type != 'community_tweet' or
+            tweet.community_id not in criteria.communities
+        ):
+            return False
+            
+        if criteria.has_media is not None:
+            has_media = bool(tweet.metadata.media)
+            if has_media != criteria.has_media:
+                return False
+                
+        if criteria.media_types:
+            media_types = {m.get('type') for m in tweet.metadata.media}
+            if not media_types & criteria.media_types:
+                return False
 
         return True
 

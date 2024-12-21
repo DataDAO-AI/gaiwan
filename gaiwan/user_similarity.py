@@ -4,7 +4,8 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Set, Tuple, DefaultDict
 import zlib
-from collections import defaultdict
+from collections import defaultdict, Counter
+from urllib.parse import urlparse
 
 import numpy as np
 from scipy import sparse
@@ -26,6 +27,9 @@ class UserSimilarityConfig:
     like_weight: float = 0.5
     retweet_weight: float = 0.4
     conversation_weight: float = 0.3
+    community_weight: float = 0.6
+    media_weight: float = 0.4
+    url_weight: float = 0.5
 
 class UserSimilarityGraph:
     """Builds various user similarity graphs."""
@@ -46,6 +50,9 @@ class UserSimilarityGraph:
         self.mutual_likes: DefaultDict[Tuple[str, str], int] = defaultdict(int)
         self.mutual_retweets: DefaultDict[Tuple[str, str], int] = defaultdict(int)
         self.conversation_pairs: DefaultDict[Tuple[str, str], int] = defaultdict(int)
+        self.user_communities: Dict[str, Set[str]] = defaultdict(set)
+        self.user_media_types: Dict[str, Counter] = defaultdict(Counter)
+        self.user_domains: Dict[str, Counter] = defaultdict(Counter)
         
     def add_tweet(self, tweet: CanonicalTweet) -> None:
         """Add a tweet to the appropriate user collections."""
@@ -63,6 +70,20 @@ class UserSimilarityGraph:
                 self.like_counts[liker] = 0
             self.like_counts[liker] += 1
             
+        if tweet.author_id:
+            if tweet.source_type == 'community_tweet' and tweet.community_id:
+                self.user_communities[tweet.author_id].add(tweet.community_id)
+            
+            for media in tweet.metadata.media:
+                self.user_media_types[tweet.author_id][media.get('type', 'unknown')] += 1
+            
+            for url in tweet.metadata.urls:
+                try:
+                    domain = urlparse(url).netloc
+                    self.user_domains[tweet.author_id][domain] += 1
+                except Exception:
+                    continue
+
     def add_social_data(self, user_id: str, followers: Set[str], following: Set[str],
                        tweet_count: int, like_count: int) -> None:
         """Add social graph data for a user."""
@@ -238,15 +259,67 @@ class UserSimilarityGraph:
         
         return sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
     
+    def compute_content_similarity(self) -> sparse.csr_matrix:
+        """Compute similarity based on content patterns."""
+        users = sorted(self.user_tweets.keys())
+        n = len(users)
+        user_to_idx = {uid: idx for idx, uid in enumerate(users)}
+        
+        rows, cols, data = [], [], []
+        
+        for i, user1 in enumerate(users):
+            for j in range(i+1, len(users)):
+                user2 = users[j]
+                
+                # Community similarity
+                community_sim = len(
+                    self.user_communities[user1] & self.user_communities[user2]
+                ) / max(
+                    len(self.user_communities[user1] | self.user_communities[user2]), 1
+                )
+                
+                # Media type similarity
+                media1 = self.user_media_types[user1]
+                media2 = self.user_media_types[user2]
+                media_sim = sum(
+                    min(media1[t], media2[t])
+                    for t in set(media1) & set(media2)
+                ) / max(
+                    sum(media1.values()) + sum(media2.values()), 1
+                )
+                
+                # Domain similarity
+                domains1 = self.user_domains[user1]
+                domains2 = self.user_domains[user2]
+                domain_sim = sum(
+                    min(domains1[d], domains2[d])
+                    for d in set(domains1) & set(domains2)
+                ) / max(
+                    sum(domains1.values()) + sum(domains2.values()), 1
+                )
+                
+                # Combine similarities
+                strength = (
+                    community_sim * self.config.community_weight +
+                    media_sim * self.config.media_weight +
+                    domain_sim * self.config.url_weight
+                ) / (
+                    self.config.community_weight +
+                    self.config.media_weight +
+                    self.config.url_weight
+                )
+                
+                if strength > 0:
+                    rows.extend([i, j])
+                    cols.extend([j, i])
+                    data.extend([strength, strength])
+        
+        return sparse.csr_matrix((data, (rows, cols)), shape=(n, n))
+    
     def combine_similarity_graphs(self, matrices: List[Tuple[sparse.csr_matrix, float]]) -> sparse.csr_matrix:
         """Combine multiple similarity matrices with weights."""
-        if not matrices:
-            raise ValueError("No matrices provided")
-            
-        result = matrices[0][0] * matrices[0][1]
-        for matrix, weight in matrices[1:]:
-            result += matrix * weight
-            
-        # Normalize
-        result.data /= result.data.max()
-        return result 
+        # Add content similarity to the mix
+        content_sim = self.compute_content_similarity()
+        matrices.append((content_sim, 0.5))  # Weight can be adjusted
+        
+        return super().combine_similarity_graphs(matrices) 
