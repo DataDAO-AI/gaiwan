@@ -29,9 +29,9 @@ def test_visakanv_archive(tmp_path: Path, caplog):
     assert metadata is not None
     assert archive_path.exists()
     
-    # Canonicalize archive
+    # Canonicalize archive without validation
     logger.info("Canonicalizing archive...")
-    canonicalize_archive(archive_dir, output_file)
+    canonicalize_archive(archive_dir, output_file, validate=False)
     assert output_file.exists()
     
     # Verify output

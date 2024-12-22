@@ -3,11 +3,13 @@
 import argparse
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any, ClassVar
+from typing import Dict, List, Optional, Set
 import time
+import jsonschema
+from gaiwan.schema_generator import generate_schema
 
 logger = logging.getLogger(__name__)
 
@@ -15,126 +17,102 @@ logger = logging.getLogger(__name__)
 class CanonicalTweet:
     """Normalized tweet format that works for all tweet types."""
     
-    # Add class-level constants for required fields
-    REQUIRED_FIELDS: ClassVar[Set[str]] = {
-        'id_str', 'created_at', 'text'
-    }
-    
     id: str
     created_at: datetime
     text: str
     entities: dict
+    author_username: str
     
-    # Optional fields with defaults
-    possibly_sensitive: bool = False
-    favorited: bool = False
-    retweeted: bool = False
-    retweet_count: Optional[int] = None
-    favorite_count: Optional[int] = None
+    # Engagement metrics
+    likers: Set[str] = field(default_factory=set)
+    retweet_count: int = 0
+    
+    # Reply metadata
     in_reply_to_status_id: Optional[str] = None
-    in_reply_to_user_id: Optional[str] = None
-    in_reply_to_screen_name: Optional[str] = None
-    screen_name: Optional[str] = None
-    source_type: str = "tweet"
+    in_reply_to_username: Optional[str] = None
+    
+    # Optional metadata
     quoted_tweet_id: Optional[str] = None
-    community_id: Optional[str] = None
 
     @classmethod
-    def from_any_tweet(cls, data: Dict, source_type: str = "tweet", username: Optional[str] = None) -> Optional['CanonicalTweet']:
+    def from_any_tweet(cls, data: Dict, username: str) -> Optional['CanonicalTweet']:
         """Create canonical tweet from any tweet type."""
         try:
-            if source_type == "note":
-                return cls._from_note_tweet(data, username)
-            else:
-                if 'tweet' not in data:
-                    logger.error(f"Missing tweet wrapper in {source_type} tweet: {data}")
+            # Handle wrapped tweet data
+            if 'tweet' in data:
+                data = data['tweet']
+                # Regular tweet format: "Sat Feb 17 19:24:40 +0000 2024"
+                created_at = datetime.strptime(data['created_at'], "%a %b %d %H:%M:%S %z %Y")
+                text = data.get('full_text', data.get('text', ''))
+                entities = data.get('entities', {})
+                tweet_id = data['id_str']
+                
+            elif 'noteTweet' in data:
+                data = data['noteTweet']
+                # Note tweet format: ISO format
+                created_at = datetime.fromisoformat(data['createdAt'].replace('Z', '+00:00'))
+                
+                # Note tweets store content in core.text
+                if 'core' not in data or 'text' not in data['core']:
                     return None
-                return cls._from_regular_tweet(data['tweet'], source_type)
-        except Exception as e:
-            logger.error(f"Error converting {source_type} tweet: {str(e)}", exc_info=True)
-            return None
-
-    @classmethod
-    def _from_regular_tweet(cls, data: Dict, source_type: str) -> Optional['CanonicalTweet']:
-        """Convert regular or community tweet."""
-        try:
-            # Check required fields
-            if not all(k in data for k in ['id_str', 'created_at']):
-                logger.error(f"Missing required fields in {source_type} tweet: {data}")
+                    
+                text = data['core']['text']
+                tweet_id = data['noteTweetId']
+                
+                # Build entities from note data
+                entities = {
+                    'hashtags': [
+                        {'text': h['text'], 'indices': [int(h['fromIndex']), int(h['toIndex'])]}
+                        for h in data['core'].get('hashtags', [])
+                    ],
+                    'urls': [
+                        {
+                            'url': u['shortUrl'],
+                            'expanded_url': u['expandedUrl'],
+                            'display_url': u['displayUrl'],
+                            'indices': [int(u['fromIndex']), int(u['toIndex'])]
+                        }
+                        for u in data['core'].get('urls', [])
+                    ],
+                    'user_mentions': [
+                        {
+                            'screen_name': m['screenName'],
+                            'indices': [int(m['fromIndex']), int(m['toIndex'])]
+                        }
+                        for m in data['core'].get('mentions', [])
+                    ]
+                }
+            else:
                 return None
-            
-            # Get text from either full_text or text field
-            text = data.get('full_text', data.get('text', ''))
+                
             if not text:
-                logger.error(f"Missing text in {source_type} tweet: {data}")
                 return None
-            
-            created_at = parse_twitter_timestamp(data['created_at'])
-            if not created_at:
-                logger.error(f"Could not parse timestamp in {source_type} tweet: {data}")
-                return None
-            
+                
             return cls(
-                id=data['id_str'],
+                id=tweet_id,
                 created_at=created_at,
                 text=text,
-                entities=data.get('entities', {}),
-                possibly_sensitive=data.get('possibly_sensitive'),
-                favorited=data.get('favorited'),
-                retweeted=data.get('retweeted'),
-                retweet_count=int(data['retweet_count']) if 'retweet_count' in data else None,
-                favorite_count=int(data['favorite_count']) if 'favorite_count' in data else None,
+                entities=entities,
+                author_username=username,
+                retweet_count=int(data.get('retweet_count', 0)),
                 in_reply_to_status_id=data.get('in_reply_to_status_id_str'),
-                in_reply_to_user_id=data.get('in_reply_to_user_id_str'),
-                in_reply_to_screen_name=data.get('in_reply_to_screen_name'),
-                screen_name=data.get('user', {}).get('screen_name'),
-                source_type=source_type,
+                in_reply_to_username=data.get('in_reply_to_screen_name'),
                 quoted_tweet_id=data.get('quoted_status_id_str')
             )
+            
         except Exception as e:
-            logger.error(f"Error in _from_regular_tweet: {str(e)}", exc_info=True)
+            logger.error(f"Error converting tweet: {str(e)}", exc_info=True)
             return None
 
-    @classmethod
-    def _from_note_tweet(cls, data: Dict, username: Optional[str] = None) -> Optional['CanonicalTweet']:
-        """Convert note tweet."""
-        try:
-            note = data.get('noteTweet', {})
-            core = note.get('core', {})
-            
-            if not all([note.get('noteTweetId'), note.get('createdAt'), core.get('text')]):
-                logger.error(f"Missing required fields in note tweet: {data}")
-                return None
-            
-            created_at = parse_twitter_timestamp(note['createdAt'])
-            if not created_at:
-                logger.error(f"Could not parse timestamp in note tweet: {data}")
-                return None
-            
-            return cls(
-                id=note['noteTweetId'],
-                created_at=created_at,
-                text=core['text'],
-                entities=core.get('entities', {}),
-                screen_name=username or note.get('screenName'),
-                source_type='note'
-            )
-        except Exception as e:
-            logger.error(f"Error in _from_note_tweet: {str(e)}", exc_info=True)
-            return None
-
-def canonicalize_archive(archive_dir: Path, output_file: Path):
+def canonicalize_archive(archive_dir: Path, output_file: Path, schema_file: Optional[Path] = None, validate: bool = False):
     """Process all archives in a directory into a unified timeline."""
-    timeline = {
-        "tweets": [],
-        "profiles": [],
-        "likes": [],
-        "social": {
-            "followers": [],
-            "following": []
-        }
-    }
     
+    # Main data structures
+    tweets: Dict[str, CanonicalTweet] = {}
+    orphaned_likes: Dict[str, Dict] = {}
+    profiles: Dict[str, Dict] = {}
+    
+    # Process each archive
     for archive_path in archive_dir.glob("*_archive.json"):
         try:
             username = archive_path.stem.split('_')[0]
@@ -143,75 +121,71 @@ def canonicalize_archive(archive_dir: Path, output_file: Path):
             with open(archive_path) as f:
                 data = json.load(f)
             
-            # Process tweets
-            for section, source_type in [
-                ('tweets', 'tweet'),
-                ('community-tweet', 'community'),
-                ('note-tweet', 'note')
-            ]:
-                if section in data:
-                    for tweet_data in data[section]:
-                        tweet = CanonicalTweet.from_any_tweet(tweet_data, source_type, username)
-                        if tweet:
-                            timeline["tweets"].append(tweet.__dict__)
-            
-            # Add profile if present
+            # Store profile
             if 'profile' in data:
-                timeline["profiles"].append({
-                    "username": username,
-                    "profile": data['profile']
-                })
+                profiles[username] = data['profile']
             
-            # Add likes
+            # Process tweets
+            for section in ['tweets', 'community-tweet', 'note-tweet']:
+                if section not in data:
+                    continue
+                    
+                for tweet_data in data[section]:
+                    tweet = CanonicalTweet.from_any_tweet(tweet_data, username)
+                    if tweet:
+                        tweets[tweet.id] = tweet
+            
+            # Process likes
             if 'like' in data:
-                timeline["likes"].extend(data['like'])
-            
-            # Add social graph
-            if 'follower' in data:
-                timeline["social"]["followers"].extend(data['follower'])
-            if 'following' in data:
-                timeline["social"]["following"].extend(data['following'])
+                for like in data['like']:
+                    if 'like' not in like:
+                        continue
+                    like_data = like['like']
+                    tweet_id = like_data.get('tweetId') or like_data.get('tWeetId')
+                    if not tweet_id:
+                        continue
+                        
+                    if tweet_id in tweets:
+                        tweets[tweet_id].likers.add(username)
+                    else:
+                        if tweet_id not in orphaned_likes:
+                            orphaned_likes[tweet_id] = {
+                                'tweet_id': tweet_id,
+                                'text': like_data.get('fullText', ''),
+                                'url': like_data.get('expandedUrl'),
+                                'likers': set()
+                            }
+                        orphaned_likes[tweet_id]['likers'].add(username)
                 
         except Exception as e:
-            logger.error(f"Error processing {archive_path}: {str(e)}", exc_info=True)
+            logger.error(f"Error processing {archive_path}: {str(e)}")
             continue
     
-    # Sort tweets by date
-    timeline["tweets"].sort(key=lambda t: t["created_at"], reverse=True)
+    # Prepare output
+    output = {
+        "tweets": [asdict(tweet) for tweet in sorted(
+            tweets.values(),
+            key=lambda t: t.created_at,
+            reverse=True
+        )],
+        "orphaned_likes": list(orphaned_likes.values()),
+        "profiles": [{"username": u, "profile": p} for u, p in profiles.items()]
+    }
     
     # Write output
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, 'w') as f:
-        json.dump(timeline, f, indent=2, default=str)
+        json.dump(output, f, indent=2, default=str)
 
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(description="Canonicalize Twitter archives")
     parser.add_argument('archive_dir', type=Path, help="Directory containing archives")
     parser.add_argument('output_file', type=Path, help="Output JSON file")
+    parser.add_argument('--schema', type=Path, help="Optional schema file to use")
     args = parser.parse_args()
     
-    canonicalize_archive(args.archive_dir, args.output_file)
-
-def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
-    """Convert Twitter's timestamp format to datetime.
-    
-    Handles both formats:
-    - ISO format: "2024-03-13T12:34:56Z"
-    - Twitter format: "Wed Mar 13 12:34:56 +0000 2024"
-    """
-    try:
-        # Try ISO format first (for note tweets)
-        if 'T' in ts:
-            return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            
-        # Try Twitter format (for regular tweets)
-        time_struct = time.strptime(ts, "%a %b %d %H:%M:%S +0000 %Y")
-        return datetime.fromtimestamp(time.mktime(time_struct)).replace(tzinfo=timezone.utc)
-        
-    except ValueError as e:
-        logger.warning(f"Could not parse timestamp: {ts} - {str(e)}")
-        return None
+    canonicalize_archive(args.archive_dir, args.output_file, args.schema)
 
 if __name__ == '__main__':
     main() 

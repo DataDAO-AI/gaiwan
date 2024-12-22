@@ -60,7 +60,7 @@ def setup_logging():
 def test_get_metadata():
     """Test fetching archive metadata using real Supabase data."""
     # Use a known good account that has data
-    metadata = get_archive_metadata("brentbaum")  # Will try _brentbaum
+    metadata = get_archive_metadata("visakanv")  # Use visakanv instead of brentbaum
     assert metadata is not None
     assert 'etag' in metadata
     assert 'size' in metadata
@@ -69,7 +69,7 @@ def test_get_metadata():
 
 def test_download_archive(tmp_path):
     """Test downloading an archive using real data."""
-    archive_path, metadata = download_archive("brentbaum", tmp_path)
+    archive_path, metadata = download_archive("visakanv", tmp_path)  # Use visakanv
     assert archive_path is not None
     assert metadata is not None
     assert archive_path.exists()
@@ -90,12 +90,15 @@ def test_get_all_accounts():
     accounts = get_all_accounts()
     assert len(accounts) > 0
     # Verify we got real accounts with exact usernames
-    assert any(a['username'] == '_brentbaum' for a in accounts)
+    assert '_brentbaum' in accounts
 
 def test_merge_archives(test_archive):
     """Test merging archives using real data."""
     with open(test_archive, 'rb') as f:
         original_data = orjson.loads(f.read())
+    
+    # Get username from archive path
+    username = test_archive.stem.split('_')[0]
     
     # Create two partial archives by removing different tweets
     collections = ['tweets', 'community_tweets', 'note_tweets', 'likes']
@@ -126,7 +129,7 @@ def test_merge_archives(test_archive):
             }
     
     # Merge the partial archives
-    merged_data = merge_archives(partial_data, partial_data_2)
+    merged_data = merge_archives(partial_data, partial_data_2, username)
     
     # Verify the merge restored all items
     for collection in collections:
@@ -159,6 +162,9 @@ def test_merge_preserves_local_modifications(test_archive):
     with open(test_archive, 'rb') as f:
         original_data = orjson.loads(f.read())
     
+    # Get username from archive path
+    username = test_archive.stem.split('_')[0]
+    
     # Add local modifications
     original_data['_metadata']['local_notes'] = "Test notes"
     original_data['_metadata']['local_tags'] = ['test', 'archive']
@@ -173,7 +179,7 @@ def test_merge_preserves_local_modifications(test_archive):
     }
     
     # Merge archives
-    merged_data = merge_archives(original_data, new_data)
+    merged_data = merge_archives(original_data, new_data, username)
     
     # Verify local modifications are preserved
     assert merged_data['_metadata']['local_notes'] == "Test notes"
