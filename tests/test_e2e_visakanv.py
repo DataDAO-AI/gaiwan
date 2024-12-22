@@ -26,8 +26,9 @@ def test_visakanv_archive(tmp_path: Path, caplog):
     
     # Download archive
     logger.info("Downloading visakanv archive...")
-    archive_path = download_archive("visakanv", archive_dir)
+    archive_path, metadata = download_archive("visakanv", archive_dir)  # Unpack tuple
     assert archive_path is not None
+    assert metadata is not None  # Verify we got metadata
     assert archive_path.exists()
     
     # Process archive
