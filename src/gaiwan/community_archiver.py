@@ -8,10 +8,8 @@ from pathlib import Path
 from typing import List, Optional, Set, Dict, Any, ClassVar
 from dataclasses import dataclass, field
 import json
-import os
 
 import requests
-import pytz
 
 # Constants
 SUPABASE_URL = "https://fabxmporizzqflnftavs.supabase.co"

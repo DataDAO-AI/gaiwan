@@ -12,3 +12,30 @@ __pycache__
 share/
 venv/
 .*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Keep gaiwan package files
+!gaiwan/
+!gaiwan/__init__.py
+!gaiwan/mixpr.py
