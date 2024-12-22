@@ -126,34 +126,43 @@ class ArchiveProcessor:
     def process_file(self, archive_path: Path) -> List[CanonicalTweet]:
         """Process a single archive file."""
         try:
-            # Extract username from filename
             username = archive_path.stem.split('_')[0]
             logger.info(f"Processing archive for {username}")
             
+            tweets = []
+            # Process file in chunks to avoid memory issues
             with open(archive_path) as f:
                 data = json.load(f)
                 
-            tweets = []
-            
-            # Handle community tweets
-            if 'community-tweet' in data:
-                for tweet_wrapper in data['community-tweet']:
-                    if 'tweet' in tweet_wrapper:
-                        tweet = CanonicalTweet.from_tweet_data(
-                            tweet_wrapper['tweet'], 
-                            source_type='community'
-                        )
-                        if tweet and tweet.id:  # Ensure tweet has an ID
-                            tweets.append(tweet)
+                # Process in batches of 1000
+                def process_batch(items, source_type):
+                    batch_tweets = []
+                    for item in items:
+                        if len(batch_tweets) >= 1000:
+                            tweets.extend(batch_tweets)
+                            batch_tweets = []
                             
-            # Handle note tweets
-            if 'note-tweet' in data:
-                for note_wrapper in data['note-tweet']:
-                    if 'noteTweet' in note_wrapper:
-                        tweet = CanonicalTweet.from_note_data(note_wrapper, username)
-                        if tweet and tweet.id:  # Ensure tweet has an ID
-                            tweets.append(tweet)
+                        if source_type == 'community' and 'tweet' in item:
+                            tweet = CanonicalTweet.from_tweet_data(
+                                item['tweet'], 
+                                source_type='community'
+                            )
+                        elif source_type == 'note' and 'noteTweet' in item:
+                            tweet = CanonicalTweet.from_note_data(item, username)
+                        else:
+                            continue
                             
+                        if tweet and tweet.id:
+                            batch_tweets.append(tweet)
+                    
+                    tweets.extend(batch_tweets)  # Add remaining tweets
+                
+                # Process each type in batches
+                if 'community-tweet' in data:
+                    process_batch(data['community-tweet'], 'community')
+                if 'note-tweet' in data:
+                    process_batch(data['note-tweet'], 'note')
+                    
             return tweets
             
         except Exception as e:
@@ -264,28 +273,33 @@ class ArchiveProcessor:
             return []
 
     def process_note_tweets(self, note_tweets_data, username):
-        for note_tweet in note_tweets_data:
+        """Process note tweets from archive data."""
+        for idx, note_tweet in enumerate(note_tweets_data):
             try:
                 note_data = note_tweet.get('noteTweet', {})
                 updated_at = CanonicalTweet.parse_twitter_datetime(note_data['updatedAt'])
-                
-                # Now both datetimes are timezone-aware for comparison
                 # ... rest of the processing ...
                 
             except Exception as e:
-                self.logger.error(f"Error processing note tweet {i} for {username}: {str(e)}\nNote data: {json.dumps(note_tweet, indent=2)[:500]}...")
+                logger.error(
+                    f"Error processing note tweet {idx} for {username}: {str(e)}\n"
+                    f"Note data: {json.dumps(note_tweet, indent=2)[:500]}..."
+                )
 
     def _process_note_tweets(self, note_tweets: List[Dict], username: str) -> List[Dict]:
         """Process note tweets from the archive."""
         processed_notes = []
-        for i, note_tweet in enumerate(note_tweets):
+        for idx, note_tweet in enumerate(note_tweets):
             try:
                 # Process note tweet
                 processed_note = self._process_single_note_tweet(note_tweet)
                 if processed_note:
                     processed_notes.append(processed_note)
             except Exception as e:
-                self.logger.error(f"Error processing note tweet {i} for {username}: {str(e)}\nNote data: {json.dumps(note_tweet, indent=2)[:500]}...")
+                logger.error(
+                    f"Error processing note tweet {idx} for {username}: {str(e)}\n"
+                    f"Note data: {json.dumps(note_tweet, indent=2)[:500]}..."
+                )
                 continue
         return processed_notes
 

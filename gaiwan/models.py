@@ -9,6 +9,9 @@ from time import strptime, mktime
 import os
 import pytz
 import logging
+from .config import MixPRConfig, UserSimilarityConfig  # Add if needed by any code in models.py
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class TweetMetadata:
@@ -47,6 +50,14 @@ class TweetMetadata:
 
 class CanonicalTweet:
     """Tweet model following the schema definition."""
+    __slots__ = (
+        'id', 'created_at', 'text', 'entities', 'possibly_sensitive',
+        'favorited', 'retweeted', 'retweet_count', 'favorite_count',
+        'in_reply_to_status_id', 'in_reply_to_user_id', 'in_reply_to_screen_name',
+        'screen_name', 'source_type', 'quoted_tweet_id', 'community_id',
+        '_metadata', '_media_urls', 'is_retweet', 'liked_by'
+    )
+    
     def __init__(
         self,
         id: str,
