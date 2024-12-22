@@ -5,7 +5,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Set, Dict, Any, ClassVar
+from typing import List, Optional, Set, Dict, Any, ClassVar, Tuple
 from dataclasses import dataclass, field
 import json
 
@@ -293,11 +293,7 @@ class ArchiveProcessor:
         self.processed_archives = set()
 
     def _load_processed_archives(self) -> Set[str]:
-        """Load set of already processed archive filenames.
-
-        Returns:
-            Set of processed archive filenames
-        """
+        """Load set of already processed archive filenames."""
         if self.processed_archives_file.exists():
             return set(
                 line.strip()
@@ -306,26 +302,36 @@ class ArchiveProcessor:
             )
         return set()
 
-    def _mark_archive_processed(self, path: Path) -> None:
-        """Mark archive as processed.
-
+    def _mark_archive_processed(self, path: Path, metadata: Dict) -> None:
+        """Mark archive as processed with metadata.
+        
         Args:
             path: Path to processed archive
+            metadata: Archive metadata including last_modified, size, etc
         """
         with self.processed_archives_file.open('a') as f:
-            f.write(f"{path.name}\n")
+            record = {
+                'filename': path.name,
+                'processed_at': datetime.now().isoformat(),
+                'metadata': metadata
+            }
+            f.write(json.dumps(record) + '\n')
         self.processed_archives.add(path.name)
 
-    def should_process_archive(self, path: Path) -> bool:
-        """Check if archive needs processing.
-
-        Args:
-            path: Path to archive file
-
-        Returns:
-            True if archive should be processed
-        """
-        return path.name not in self.processed_archives
+    def should_process_archive(self, path: Path, current_metadata: Dict) -> bool:
+        """Check if archive needs processing based on metadata changes."""
+        if path.name not in self.processed_archives:
+            return True
+            
+        # Check if archive has been modified since last processing
+        stored_metadata = self._get_stored_metadata(path.name)
+        if not stored_metadata:
+            return True
+            
+        return (
+            stored_metadata.get('etag') != current_metadata.get('etag') or
+            stored_metadata.get('last_modified') != current_metadata.get('last_modified')
+        )
 
     def process_file(self, archive_path: Path) -> List[CanonicalTweet]:
         """Process a single archive file."""
@@ -333,40 +339,57 @@ class ArchiveProcessor:
             username = archive_path.stem.split('_')[0]
             logger.info(f"Processing archive for {username}")
             
-            tweets = []
-            # Process file in chunks to avoid memory issues
+            # Load new archive data
             with open(archive_path) as f:
-                data = json.load(f)
+                new_data = json.load(f)
+            
+            # Check for existing archive data
+            existing_path = self.output_dir / f"{username}_processed.json"
+            if existing_path.exists():
+                logger.info(f"Found existing processed archive for {username}")
+                with open(existing_path) as f:
+                    old_data = json.load(f)
+                # Merge archives
+                data = self.merge_archives(old_data, new_data)
+            else:
+                data = new_data
+            
+            # Save merged data
+            with open(existing_path, 'w') as f:
+                json.dump(data, f)
+            
+            tweets = []
+            # Process tweets in batches
+            def process_batch(items, source_type):
+                batch_tweets = []
+                for item in items:
+                    if len(batch_tweets) >= BATCH_SIZE:
+                        tweets.extend(batch_tweets)
+                        batch_tweets = []
+                        
+                    if source_type == 'community' and 'tweet' in item:
+                        tweet = CanonicalTweet.from_tweet_data(
+                            item['tweet'], 
+                            source_type='community'
+                        )
+                    elif source_type == 'note' and 'noteTweet' in item:
+                        tweet = CanonicalTweet.from_note_data(item, username)
+                    else:
+                        continue
+                        
+                    if tweet and tweet.id:
+                        batch_tweets.append(tweet)
                 
-                # Process in batches of 1000
-                def process_batch(items, source_type):
-                    batch_tweets = []
-                    for item in items:
-                        if len(batch_tweets) >= 1000:
-                            tweets.extend(batch_tweets)
-                            batch_tweets = []
-                            
-                        if source_type == 'community' and 'tweet' in item:
-                            tweet = CanonicalTweet.from_tweet_data(
-                                item['tweet'], 
-                                source_type='community'
-                            )
-                        elif source_type == 'note' and 'noteTweet' in item:
-                            tweet = CanonicalTweet.from_note_data(item, username)
-                        else:
-                            continue
-                            
-                        if tweet and tweet.id:
-                            batch_tweets.append(tweet)
-                    
-                    tweets.extend(batch_tweets)  # Add remaining tweets
+                tweets.extend(batch_tweets)  # Add remaining tweets
+            
+            # Process each type in batches
+            if 'community-tweet' in data:
+                process_batch(data['community-tweet'], 'community')
+            if 'note-tweet' in data:
+                process_batch(data['note-tweet'], 'note')
+            if 'tweets' in data:
+                process_batch(data['tweets'], 'tweet')
                 
-                # Process each type in batches
-                if 'community-tweet' in data:
-                    process_batch(data['community-tweet'], 'community')
-                if 'note-tweet' in data:
-                    process_batch(data['note-tweet'], 'note')
-                    
             return tweets
             
         except Exception as e:
@@ -561,6 +584,106 @@ class ArchiveProcessor:
             logger.error(f"Error creating tweet from data: {e}")
             return None
 
+    def _get_stored_metadata(self, filename: str) -> Optional[Dict]:
+        """Get stored metadata for an archive.
+        
+        Args:
+            filename: Name of archive file
+            
+        Returns:
+            Stored metadata dict or None if not found
+        """
+        if not self.processed_archives_file.exists():
+            return None
+        
+        with self.processed_archives_file.open() as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    if record['filename'] == filename:
+                        return record['metadata']
+                except json.JSONDecodeError:
+                    continue
+        return None
+
+    def merge_archives(self, old_data: Dict, new_data: Dict) -> Dict:
+        """Merge two archive datasets preserving unique content.
+        
+        Args:
+            old_data: Existing archive data
+            new_data: New archive data to merge
+            
+        Returns:
+            Merged archive data
+        """
+        merged = old_data.copy()
+        
+        # Helper to merge lists of items by ID field
+        def merge_by_id(old_items: List[Dict], new_items: List[Dict], id_field: str) -> List[Dict]:
+            merged_items = {item[id_field]: item for item in old_items}
+            # Update/add new items
+            for item in new_items:
+                if item[id_field] not in merged_items:
+                    merged_items[item[id_field]] = item
+                else:
+                    # If item exists in both, prefer new version
+                    merged_items[item[id_field]] = item
+            return list(merged_items.values())
+        
+        # Merge tweets
+        if 'tweets' in new_data:
+            merged['tweets'] = merge_by_id(
+                merged.get('tweets', []),
+                new_data['tweets'],
+                'id_str'
+            )
+        
+        # Merge community tweets
+        if 'community-tweet' in new_data:
+            merged['community-tweet'] = merge_by_id(
+                merged.get('community-tweet', []),
+                new_data['community-tweet'],
+                'tweet.id_str'
+            )
+        
+        # Merge note tweets
+        if 'note-tweet' in new_data:
+            merged['note-tweet'] = merge_by_id(
+                merged.get('note-tweet', []),
+                new_data['note-tweet'],
+                'noteTweet.noteTweetId'
+            )
+        
+        # Merge likes (preserve all unique likes)
+        if 'like' in new_data:
+            old_likes = {like['like']['tweetId'] for like in merged.get('like', [])}
+            merged['like'] = merged.get('like', []) + [
+                like for like in new_data['like']
+                if like['like']['tweetId'] not in old_likes
+            ]
+        
+        # Merge followers (preserve all unique followers)
+        if 'follower' in new_data:
+            old_followers = {f['follower']['accountId'] for f in merged.get('follower', [])}
+            merged['follower'] = merged.get('follower', []) + [
+                f for f in new_data['follower']
+                if f['follower']['accountId'] not in old_followers
+            ]
+        
+        # Merge following (preserve all unique following)
+        if 'following' in new_data:
+            old_following = {f['following']['accountId'] for f in merged.get('following', [])}
+            merged['following'] = merged.get('following', []) + [
+                f for f in new_data['following']
+                if f['following']['accountId'] not in old_following
+            ]
+        
+        # Update profile if present in new data
+        if 'profile' in new_data:
+            merged['profile'] = new_data['profile']
+        
+        return merged
+
 def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
     """Convert Twitter's timestamp format to datetime.
 
@@ -604,25 +727,37 @@ def get_all_accounts() -> List[dict]:
         logger.error("Failed to fetch accounts: %s", str(e))
         return []
 
-def download_archive(username: str, output_dir: Path) -> Optional[Path]:
-    """Download a Twitter archive if it doesn't exist locally.
+def download_archive(username: str, output_dir: Path) -> Tuple[Optional[Path], Optional[Dict]]:
+    """Download a Twitter archive if it doesn't exist locally or has changed.
 
     Args:
         username: Twitter username
         output_dir: Directory to save archive
 
     Returns:
-        Path to downloaded archive or None if download fails
+        Tuple of (Path to archive or None, metadata dict or None)
     """
     username = username.lower()
     output_file = output_dir / f"{username}_archive.json"
+    
+    # Get current metadata
+    metadata = get_archive_metadata(username)
+    if not metadata:
+        logger.error("Could not fetch metadata for %s", username)
+        return None, None
 
+    # Check if we need to download
     if output_file.exists():
-        logger.info("Archive for %s already exists, skipping download", username)
-        return output_file
+        logger.info("Archive exists for %s, checking if updated", username)
+        stored_metadata = _get_stored_metadata(output_file.name)
+        if stored_metadata:
+            if (stored_metadata.get('etag') == metadata.get('etag') and
+                stored_metadata.get('last_modified') == metadata.get('last_modified')):
+                logger.info("Archive for %s is up to date", username)
+                return output_file, metadata
 
+    # Download new/updated archive
     url = f"{SUPABASE_URL}/storage/v1/object/public/archives/{username}/archive.json"
-
     try:
         logger.info("Downloading archive for %s", username)
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
@@ -632,10 +767,41 @@ def download_archive(username: str, output_dir: Path) -> Optional[Path]:
         output_file.write_bytes(response.content)
 
         logger.info("Successfully downloaded archive for %s", username)
-        return output_file
+        return output_file, metadata
 
     except requests.RequestException as e:
         logger.error("Failed to download archive for %s: %s", username, str(e))
+        return None, None
+
+def get_archive_metadata(username: str) -> Optional[Dict]:
+    """Fetch metadata about an archive from Supabase.
+    
+    Args:
+        username: Twitter username
+        
+    Returns:
+        Dict with metadata including last_modified, size, etc or None if not found
+    """
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+    
+    try:
+        response = requests.head(
+            f"{SUPABASE_URL}/storage/v1/object/public/archives/{username}/archive.json",
+            headers=headers,
+            timeout=REQUEST_TIMEOUT
+        )
+        if response.ok:
+            return {
+                'last_modified': response.headers.get('last-modified'),
+                'size': response.headers.get('content-length'),
+                'etag': response.headers.get('etag')
+            }
+        return None
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch archive metadata for {username}: {str(e)}")
         return None
 
 def main():
@@ -675,13 +841,22 @@ def main():
         processor.processed_archives.clear()
 
     for username in usernames:
-        archive_path = download_archive(username, args.archive_dir)
-        if archive_path:
-            processor.process_file(archive_path)
+        archive_path, metadata = download_archive(username, args.archive_dir)
+        if archive_path and metadata:
+            if processor.should_process_archive(archive_path, metadata):
+                tweets = processor.process_file(archive_path)
+                if tweets:
+                    processor._mark_archive_processed(archive_path, metadata)
 
+    # Process any existing archives not covered above
     existing_archives = set(args.archive_dir.glob('*_archive.json'))
     for path in existing_archives:
-        processor.process_file(path)
+        username = path.stem.split('_')[0]
+        metadata = get_archive_metadata(username)
+        if metadata and processor.should_process_archive(path, metadata):
+            tweets = processor.process_file(path)
+            if tweets:
+                processor._mark_archive_processed(path, metadata)
 
 if __name__ == '__main__':
     main()
