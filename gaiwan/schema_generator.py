@@ -497,24 +497,34 @@ def analyze_schema_differences(base_schema: Dict[str, Any], archive_file: Path, 
 
 def analyze_field_values(archive_file: Path, field_path: str) -> Set[Any]:
     """Analyze actual values of a specific field across an archive."""
+    values = set()
+    
+    # Process in chunks to reduce memory usage
+    def process_chunk(chunk):
+        parts = field_path.split('.')
+        def extract_values(obj: Dict[str, Any], path: List[str]):
+            if not path:
+                values.add(obj)
+                return
+            if isinstance(obj, list):
+                for item in obj:
+                    extract_values(item, path)
+            elif isinstance(obj, dict):
+                if path[0] in obj:
+                    extract_values(obj[path[0]], path[1:])
+    
+        extract_values(chunk, parts)
+    
+    # Read file in chunks
+    chunk_size = 1000  # Adjust based on your needs
     with open(archive_file) as f:
         data = json.load(f)
+        for key in data:
+            if isinstance(data[key], list):
+                for i in range(0, len(data[key]), chunk_size):
+                    chunk = data[key][i:i + chunk_size]
+                    process_chunk({key: chunk})
     
-    values = set()
-    parts = field_path.split('.')
-    
-    def extract_values(obj: Dict[str, Any], path: List[str]):
-        if not path:
-            values.add(obj)
-            return
-        if isinstance(obj, list):
-            for item in obj:
-                extract_values(item, path)
-        elif isinstance(obj, dict):
-            if path[0] in obj:
-                extract_values(obj[path[0]], path[1:])
-    
-    extract_values(data, parts)
     return values
 
 def build_tweet_properties(field_types: Dict[str, Set[str]], path: str) -> Dict[str, Any]:
