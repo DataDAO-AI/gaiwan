@@ -25,11 +25,8 @@ logger = logging.getLogger(__name__)
 
 def get_archive_metadata(username: str) -> Optional[Dict]:
     """Fetch metadata about an archive from Supabase."""
-    # Try both with and without underscore prefix
-    urls_to_try = [
-        f"{SUPABASE_URL}/storage/v1/object/public/archives/_{username}/archive.json",
-        f"{SUPABASE_URL}/storage/v1/object/public/archives/{username}/archive.json"
-    ]
+    # Use username exactly as it appears - no underscore manipulation
+    url = f"{SUPABASE_URL}/storage/v1/object/public/archives/{username}/archive.json"
     
     headers = {
         "apikey": SUPABASE_KEY,
@@ -38,34 +35,54 @@ def get_archive_metadata(username: str) -> Optional[Dict]:
         "Accept": "application/json"
     }
     
-    for url in urls_to_try:
-        try:
-            logger.debug(f"Fetching metadata from {url}")
-            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            logger.debug(f"Got response: {response.status_code}")
+    try:
+        logger.debug(f"Fetching metadata from {url}")
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        logger.debug(f"Got response: {response.status_code}")
+        
+        if response.ok:
+            content = response.content
+            return {
+                'size': str(len(content)),
+                'url': url,
+                'content': content,
+                'etag': response.headers.get('etag', ''),
+                'last_modified': response.headers.get('last-modified', '')
+            }
+        elif response.status_code != 404:  # Only log non-404 errors
+            logger.debug(f"Response body: {response.text}")
+            logger.error(f"Got {response.status_code} at {url}")
             
-            if response.ok:
-                content = response.content
-                return {
-                    'size': str(len(content)),
-                    'url': url,
-                    'content': content,
-                    'etag': response.headers.get('etag', ''),
-                    'last_modified': response.headers.get('last-modified', '')
-                }
-            elif response.status_code != 404:  # Only log non-404 errors
-                logger.debug(f"Response body: {response.text}")
-                logger.error(f"Got {response.status_code} at {url}")
-                
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch from {url}: {str(e)}")
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch from {url}: {str(e)}")
     
     return None
 
-def merge_archives(old_data: Dict, new_data: Dict) -> Dict:
+def merge_archives(old_data: Dict, new_data: Dict, username: str) -> Dict:
     """Merge two archives, preserving all tweets and local modifications."""
     # Create a new archive with old data as base
     merged = old_data.copy()
+    
+    # Fix malformed tWeetId in imperialauditor's archive only
+    if username == 'imperialauditor' and 'like' in new_data:
+        logger.info(f"Checking {username}'s archive for tWeetId field...")
+        fixed_count = 0
+        total_likes = len(new_data['like'])
+        
+        for i, like in enumerate(new_data['like']):
+            if 'like' in like:
+                like_data = like['like']
+                logger.debug(f"Like {i+1}/{total_likes} fields: {sorted(like_data.keys())}")
+                if 'tWeetId' in like_data:
+                    # Move tWeetId to tweetId
+                    like_data['tweetId'] = like_data.pop('tWeetId')
+                    fixed_count += 1
+                    logger.debug(f"Fixed tWeetId -> tweetId in like {i+1}")
+        
+        if fixed_count:
+            logger.info(f"Fixed {fixed_count}/{total_likes} tWeetId fields in {username}'s archive")
+        else:
+            logger.info(f"No tWeetId fields found in {username}'s archive ({total_likes} likes)")
     
     # Collections to merge (from schema)
     collections = [
@@ -137,6 +154,27 @@ def download_archive(username: str, output_dir: Path) -> Tuple[Optional[Path], O
         new_data = orjson.loads(content)
         new_data['_metadata'] = metadata
         
+        # Fix malformed tWeetId right after download for imperialauditor
+        if username == 'imperialauditor' and 'like' in new_data:
+            logger.info(f"Checking {username}'s archive for tWeetId field...")
+            fixed_count = 0
+            total_likes = len(new_data['like'])
+            
+            for i, like in enumerate(new_data['like']):
+                if 'like' in like:
+                    like_data = like['like']
+                    logger.debug(f"Like {i+1}/{total_likes} fields: {sorted(like_data.keys())}")
+                    if 'tWeetId' in like_data:
+                        # Move tWeetId to tweetId
+                        like_data['tweetId'] = like_data.pop('tWeetId')
+                        fixed_count += 1
+                        logger.debug(f"Fixed tWeetId -> tweetId in like {i+1}")
+            
+            if fixed_count:
+                logger.info(f"Fixed {fixed_count}/{total_likes} tWeetId fields in {username}'s archive")
+            else:
+                logger.info(f"No tWeetId fields found in {username}'s archive ({total_likes} likes)")
+        
         # If file exists, merge instead of overwrite
         if output_file.exists():
             try:
@@ -150,7 +188,7 @@ def download_archive(username: str, output_dir: Path) -> Tuple[Optional[Path], O
                     return output_file, metadata
                     
                 # Merge archives
-                merged_data = merge_archives(old_data, new_data)
+                merged_data = merge_archives(old_data, new_data, username)
                 new_data = merged_data
                 
             except Exception as e:
@@ -168,7 +206,7 @@ def download_archive(username: str, output_dir: Path) -> Tuple[Optional[Path], O
         logger.error(f"Failed to download archive for {username}: {str(e)}")
         return None, None
 
-def get_all_accounts() -> List[Dict]:
+def get_all_accounts() -> List[str]:
     """Fetch list of all accounts from Supabase."""
     headers = {
         "apikey": SUPABASE_KEY,
@@ -184,7 +222,9 @@ def get_all_accounts() -> List[Dict]:
         logger.debug(f"Got response: {response.status_code}")
         
         if response.ok:
-            return response.json()  # Return usernames exactly as they are
+            # Extract just the usernames from the response
+            accounts = response.json()
+            return [account['username'] for account in accounts]
         else:
             logger.error(f"Failed to get accounts: {response.status_code}")
             if not response.ok:
@@ -292,7 +332,8 @@ def download_archives(usernames: List[str], output_dir: Path):
                              desc="Downloading", unit="archive"):
                 username = futures[future]
                 try:
-                    if future.result():
+                    result = future.result()
+                    if result[0] and result[1]:  # Check both path and metadata returned
                         success.append(username)
                     else:
                         failed.append(username)
@@ -303,11 +344,9 @@ def download_archives(usernames: List[str], output_dir: Path):
         # Report results
         logger.info(f"\nDownload summary:")
         if success:
-            logger.info(f"  - Downloaded {len(success)} archives")
+            logger.info(f"  - Successfully downloaded {len(success)} archives: {', '.join(success)}")
         if failed:
-            logger.info(f"  - Failed to download {len(failed)} archives:")
-            for username in sorted(failed):
-                logger.info(f"    - {username}")
+            logger.info(f"  - Failed to download {len(failed)} archives: {', '.join(failed)}")
 
 def main():
     """Download Twitter archives from Supabase."""

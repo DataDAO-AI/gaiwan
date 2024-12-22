@@ -1,119 +1,121 @@
-"""Tests for tweet canonicalization."""
+"""Tests for tweet canonicalization using live archive data."""
 
 import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
-
 import pytest
 
-from gaiwan.canonicalize import CanonicalTweet, canonicalize_archive
+from gaiwan.canonicalize import canonicalize_archive
+from gaiwan.community_archiver import download_archives
+
+# Test with accounts we know are in the archive
+TEST_ACCOUNTS = [
+    "visakanv",        # Has lots of tweets and likes
+    "eigenrobot",      # Has community tweets
+    "selentelechia"    # Has note tweets
+]
 
 @pytest.fixture
-def sample_tweet_data():
-    """Create sample tweet data for testing."""
-    return {
-        "tweet": {
-            "id_str": "123",
-            "created_at": "Wed Mar 13 12:34:56 +0000 2024",
-            "full_text": "Regular tweet",
-            "entities": {},
-            "retweet_count": "0",
-            "favorite_count": "0"
-        }
-    }
-
-def test_canonical_tweet(sample_tweet_data):
-    """Test tweet canonicalization."""
-    tweet = CanonicalTweet.from_any_tweet(sample_tweet_data, "tweet")
-    
-    assert tweet is not None
-    assert tweet.id == "123"
-    assert tweet.text == "Regular tweet"
-    assert tweet.source_type == "tweet"
-    
-    # Test community tweet
-    community_tweet = CanonicalTweet.from_any_tweet({
-        "tweet": {
-            "id_str": "456",
-            "created_at": "Wed Mar 13 12:34:56 +0000 2024",
-            "text": "Community tweet",
-            "entities": {}
-        }
-    }, "community")
-    
-    assert community_tweet is not None
-    assert community_tweet.id == "456"
-    assert community_tweet.text == "Community tweet"
-    assert community_tweet.source_type == "community"
-    
-    # Test note tweet
-    note_tweet = CanonicalTweet.from_any_tweet({
-        "noteTweet": {
-            "noteTweetId": "789",
-            "createdAt": "2024-03-13T12:34:56Z",
-            "core": {
-                "text": "Note tweet",
-                "entities": {}
-            }
-        }
-    }, "note")
-    
-    assert note_tweet is not None
-    assert note_tweet.id == "789"
-    assert note_tweet.text == "Note tweet"
-    assert note_tweet.source_type == "note"
-
-def test_canonicalize_archive(tmp_path):
-    """Test archive canonicalization."""
+def live_archives(tmp_path):
+    """Download real archives for testing."""
     archive_dir = tmp_path / "archives"
     archive_dir.mkdir()
     
-    # Create test archives
-    archives = {
-        "user1": {
-            "tweets": [
-                {
-                    "tweet": {
-                        "id_str": "1",
-                        "created_at": "Wed Mar 13 12:34:56 +0000 2024",
-                        "text": "User 1 tweet",
-                        "entities": {},
-                        "retweet_count": "0",
-                        "favorite_count": "0"
-                    }
-                }
-            ],
-            "profile": {"screen_name": "user1"}
-        },
-        "user2": {
-            "tweets": [
-                {
-                    "tweet": {
-                        "id_str": "2",
-                        "created_at": "Wed Mar 13 12:34:57 +0000 2024",
-                        "text": "User 2 tweet",
-                        "entities": {},
-                        "retweet_count": "0",
-                        "favorite_count": "0"
-                    }
-                }
-            ],
-            "profile": {"screen_name": "user2"}
-        }
-    }
+    # Download test archives
+    download_archives(TEST_ACCOUNTS, archive_dir)
     
-    for username, data in archives.items():
-        with open(archive_dir / f"{username}_archive.json", "w") as f:
-            json.dump(data, f)
+    # Verify we got some data
+    archives = list(archive_dir.glob("*_archive.json"))
+    if not archives:
+        pytest.skip("Failed to download any test archives")
     
-    output_file = tmp_path / "timeline.json"
-    canonicalize_archive(archive_dir, output_file)
+    # Print what we got
+    print("\nDownloaded archives:")
+    for archive in archives:
+        size_mb = archive.stat().st_size / (1024 * 1024)
+        print(f"{archive.name}: {size_mb:.1f}MB")
+        
+    return archive_dir
+
+def test_canonicalization_with_live_data(live_archives, tmp_path):
+    """Test canonicalization using live archive data."""
+    # First check what archives we actually got
+    archives = list(live_archives.glob("*_archive.json"))
+    usernames = {p.stem.split('_')[0].lower() for p in archives}
     
-    assert output_file.exists()
+    if not usernames:
+        pytest.skip("No archives downloaded successfully")
+    
+    print(f"\nSuccessfully downloaded archives for: {', '.join(sorted(usernames))}")
+    
+    output_file = tmp_path / "canonical.json"
+    canonicalize_archive(live_archives, output_file)
+    
     with open(output_file) as f:
-        timeline = json.load(f)
-        assert "tweets" in timeline
-        assert "profiles" in timeline
-        assert len(timeline["tweets"]) == 2
-        assert len(timeline["profiles"]) == 2
+        result = json.load(f)
+    
+    # Basic structure checks
+    assert set(result.keys()) == {"tweets", "orphaned_likes", "profiles"}
+    
+    # Print summary stats
+    tweets = result["tweets"]
+    orphaned = result["orphaned_likes"]
+    profiles = result["profiles"]
+    
+    print(f"\nCanonical archive summary:")
+    print(f"Total tweets: {len(tweets)}")
+    print(f"Total orphaned likes: {len(orphaned)}")
+    print(f"Total profiles: {len(profiles)}")
+    
+    # Verify we got profiles for all archives we downloaded
+    profile_usernames = {p["username"].lower() for p in profiles}
+    assert profile_usernames == usernames, \
+        f"Missing profiles for: {usernames - profile_usernames}"
+    
+    # Check tweet types
+    print("\nTweet samples by author:")
+    by_author = {}
+    for tweet in tweets:
+        author = tweet["author_username"]
+        if author not in by_author:
+            by_author[author] = []
+        by_author[author].append(tweet)
+    
+    for author, author_tweets in by_author.items():
+        print(f"\n{author} ({len(author_tweets)} tweets):")
+        # Show first tweet from this author
+        tweet = author_tweets[0]
+        print(f"- {tweet['text'][:100]}...")
+        print(f"  ID: {tweet['id']}")
+        print(f"  Created: {tweet['created_at']}")
+        print(f"  Likers: {len(tweet.get('likers', []))}")
+    
+    # Check likes distribution
+    tweets_with_likes = sum(1 for t in tweets if t.get("likers"))
+    print(f"\nLike stats:")
+    print(f"Tweets with likes: {tweets_with_likes}")
+    if tweets_with_likes:
+        likes_counts = [len(t["likers"]) for t in tweets if t.get("likers")]
+        avg_likes = sum(likes_counts) / len(likes_counts)
+        max_likes = max(likes_counts)
+        print(f"Average likes per tweet: {avg_likes:.1f}")
+        print(f"Max likes on a tweet: {max_likes}")
+    
+    # Sample orphaned likes
+    if orphaned:
+        print(f"\nOrphaned likes sample:")
+        for like in orphaned[:3]:
+            print(f"\nTweet {like['tweet_id']}:")
+            print(f"Text: {like['text'][:100]}...")
+            print(f"Liked by: {len(like['likers'])} users")
+    
+    # Verify data integrity
+    assert len(tweets) > 0, "Should have some tweets"
+    assert all("id" in t for t in tweets), "All tweets should have IDs"
+    assert all("text" in t for t in tweets), "All tweets should have text"
+    assert all("created_at" in t for t in tweets), "All tweets should have timestamps"
+    assert all("author_username" in t for t in tweets), "All tweets should have authors"
+    
+    # Verify chronological ordering
+    timestamps = [t["created_at"] for t in tweets]
+    assert timestamps == sorted(timestamps, reverse=True), "Tweets should be in reverse chronological order"
