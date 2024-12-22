@@ -12,9 +12,14 @@ dependencies = [
     "numpy",
     "scipy",
     "scikit-learn",
-    "requests",
-    "jsonschema>=4.0.0",
     "requests>=2.31.0",
+    "jsonschema>=4.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-cov",
     "pytest-timeout>=2.1.0",
 ]
 

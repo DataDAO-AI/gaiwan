@@ -1,4 +1,4 @@
-"""Tests for archive processor."""
+"""Tests for community archiver."""
 
 import json
 import logging

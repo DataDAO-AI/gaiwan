@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from gaiwan.archive_processor import ArchiveProcessor
+from gaiwan.community_archiver import ArchiveProcessor, CanonicalTweet
 from gaiwan.conversation_analyzer import ConversationAnalyzer
-from gaiwan.models import CanonicalTweet, MixPRConfig
+from gaiwan.mixpr import MixPRConfig
 from gaiwan.mixpr import MixPR
 from gaiwan.stats_collector import StatsManager
 from gaiwan.user_similarity import UserSimilarityGraph, UserSimilarityConfig

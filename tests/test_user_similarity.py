@@ -3,7 +3,8 @@
 import pytest
 import numpy as np
 from scipy import sparse
-from gaiwan.user_similarity import UserSimilarityGraph
+from gaiwan.community_archiver import CanonicalTweet
+from gaiwan.user_similarity import UserSimilarityGraph, UserSimilarityConfig
 
 def test_user_similarity_initialization(user_similarity_config):
     """Test UserSimilarityGraph initialization."""
