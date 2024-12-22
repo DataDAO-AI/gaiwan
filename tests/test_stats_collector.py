@@ -2,7 +2,8 @@
 
 import pytest
 from pathlib import Path
-from gaiwan.stats_collector import ArchiveStats, StatsManager
+from gaiwan.community_archiver import CanonicalTweet
+from gaiwan.stats_collector import StatsManager
 
 def test_archive_stats_initialization():
     """Test ArchiveStats initialization with default values."""

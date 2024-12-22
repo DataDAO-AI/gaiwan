@@ -5,15 +5,13 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Set, Dict, Any
+from typing import List, Optional, Set, Dict, Any, ClassVar
+from dataclasses import dataclass, field
 import json
 import os
 
 import requests
 import pytz
-
-from gaiwan.models import CanonicalTweet
-from gaiwan.stats_collector import StatsManager
 
 # Constants
 SUPABASE_URL = "https://fabxmporizzqflnftavs.supabase.co"
@@ -30,6 +28,215 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+@dataclass
+class TweetMetadata:
+    """Metadata extracted from tweet entities."""
+    mentioned_users: Set[str] = field(default_factory=set)
+    hashtags: Set[str] = field(default_factory=set)
+    urls: Set[str] = field(default_factory=set)
+    media_urls: List[str] = field(default_factory=list)
+
+    @classmethod
+    def from_entities(cls, entities: dict) -> 'TweetMetadata':
+        """Create metadata from tweet entities following the schema."""
+        metadata = cls()
+        
+        # Extract user mentions
+        for mention in entities.get('user_mentions', []):
+            if 'screen_name' in mention:
+                metadata.mentioned_users.add(mention['screen_name'].lower())
+
+        # Extract hashtags
+        for tag in entities.get('hashtags', []):
+            if 'text' in tag:
+                metadata.hashtags.add(tag['text'].lower())
+
+        # Extract URLs
+        for url in entities.get('urls', []):
+            if 'expanded_url' in url:
+                metadata.urls.add(url['expanded_url'])
+
+        # Extract media URLs
+        for media in entities.get('media', []):
+            if 'media_url_https' in media:
+                metadata.media_urls.append(media['media_url_https'])
+
+        return metadata
+
+class CanonicalTweet:
+    """Tweet model following the schema definition."""
+    
+    # Add class-level constants for required fields
+    REQUIRED_FIELDS: ClassVar[Set[str]] = {
+        'id', 'created_at', 'text', 'entities'
+    }
+    
+    # Add timestamp format patterns
+    TIMESTAMP_FORMATS: ClassVar[List[str]] = [
+        # ISO format with timezone
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        # Twitter's historical format
+        "%a %b %d %H:%M:%S +0000 %Y"
+    ]
+
+    __slots__ = (
+        'id', 'created_at', 'text', 'entities', 'possibly_sensitive',
+        'favorited', 'retweeted', 'retweet_count', 'favorite_count',
+        'in_reply_to_status_id', 'in_reply_to_user_id', 'in_reply_to_screen_name',
+        'screen_name', 'source_type', 'quoted_tweet_id', 'community_id',
+        '_metadata', '_media_urls', 'is_retweet', 'liked_by'
+    )
+
+    def __init__(
+        self,
+        id: str,
+        created_at: datetime,
+        text: str,
+        entities: dict,
+        possibly_sensitive: Optional[bool] = None,
+        favorited: Optional[bool] = None,
+        retweeted: Optional[bool] = None,
+        retweet_count: Optional[int] = None,
+        favorite_count: Optional[int] = None,
+        in_reply_to_status_id: Optional[str] = None,
+        in_reply_to_user_id: Optional[str] = None,
+        in_reply_to_screen_name: Optional[str] = None,
+        screen_name: Optional[str] = None,
+        source_type: str = "tweet",
+        quoted_tweet_id: Optional[str] = None,
+        community_id: Optional[str] = None,
+    ):
+        self.id = id
+        self.created_at = created_at
+        self.text = text
+        self.entities = entities
+        self.possibly_sensitive = possibly_sensitive
+        self.favorited = favorited
+        self.retweeted = retweeted
+        self.retweet_count = retweet_count
+        self.favorite_count = favorite_count
+        self.in_reply_to_status_id = in_reply_to_status_id
+        self.in_reply_to_user_id = in_reply_to_user_id
+        self.in_reply_to_screen_name = in_reply_to_screen_name
+        self.screen_name = screen_name
+        self.source_type = source_type
+        self.quoted_tweet_id = quoted_tweet_id
+        self.community_id = community_id
+
+        # Initialize metadata
+        self._metadata = TweetMetadata.from_entities(entities)
+        self.is_retweet = bool(self.retweeted or text.startswith('RT @'))
+        self.liked_by = set()
+
+    @property
+    def metadata(self) -> TweetMetadata:
+        """Get tweet metadata."""
+        return self._metadata
+
+    @property
+    def reply_to_tweet_id(self) -> Optional[str]:
+        """Alias for in_reply_to_status_id for compatibility."""
+        return self.in_reply_to_status_id
+
+    @property
+    def reply_to_user_id(self) -> Optional[str]:
+        """Alias for in_reply_to_user_id for compatibility."""
+        return self.in_reply_to_user_id
+
+    @property
+    def reply_to_screen_name(self) -> Optional[str]:
+        """Alias for in_reply_to_screen_name for compatibility."""
+        return self.in_reply_to_screen_name
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any], source_type: str = "tweet") -> Optional['CanonicalTweet']:
+        """Create tweet from dictionary data."""
+        try:
+            # Handle nested tweet structure
+            if 'tweet' in data:
+                data = data['tweet']
+
+            # Parse timestamp
+            created_at = cls.parse_timestamp(data.get('created_at'))
+            if not created_at:
+                return None
+
+            return cls(
+                id=data.get('id_str') or str(data.get('id')),
+                created_at=created_at,
+                text=data.get('full_text') or data.get('text', ''),
+                entities=data.get('entities', {}),
+                possibly_sensitive=data.get('possibly_sensitive'),
+                favorited=data.get('favorited'),
+                retweeted=data.get('retweeted'),
+                retweet_count=int(data['retweet_count']) if 'retweet_count' in data else None,
+                favorite_count=int(data['favorite_count']) if 'favorite_count' in data else None,
+                in_reply_to_status_id=data.get('in_reply_to_status_id_str'),
+                in_reply_to_user_id=data.get('in_reply_to_user_id_str'),
+                in_reply_to_screen_name=data.get('in_reply_to_screen_name'),
+                screen_name=data.get('user', {}).get('screen_name'),
+                source_type=source_type,
+                quoted_tweet_id=data.get('quoted_status_id_str'),
+                community_id=data.get('community_id_str')
+            )
+        except Exception as e:
+            logger.error(f"Error creating tweet from data: {e}")
+            return None
+
+    @classmethod
+    def from_note_data(cls, data: Dict[str, Any], username: Optional[str] = None) -> Optional['CanonicalTweet']:
+        """Create from note tweet data."""
+        try:
+            note = data.get('noteTweet', {})
+            core = note.get('core', {})
+            
+            if not all([note.get('noteTweetId'), note.get('createdAt'), core.get('text')]):
+                return None
+                
+            return cls(
+                id=note['noteTweetId'],
+                created_at=cls.parse_timestamp(note['createdAt']),
+                text=core['text'],
+                entities=core.get('entities', {}),
+                screen_name=username or note.get('screenName'),
+                source_type='note'
+            )
+        except Exception as e:
+            logger.error(f"Error creating tweet from note data: {e}")
+            return None
+
+    @classmethod
+    def from_tweet_data(cls, data: Dict[str, Any], source_type: str = "tweet") -> Optional['CanonicalTweet']:
+        """Alias for from_dict for backward compatibility."""
+        return cls.from_dict(data, source_type)
+
+    @classmethod
+    def parse_timestamp(cls, ts: str) -> Optional[datetime]:
+        """Convert Twitter's timestamp format to datetime.
+
+        Args:
+            ts: Twitter format timestamp string
+
+        Returns:
+            Parsed datetime or None if parsing fails
+        """
+        if not ts:
+            return None
+            
+        try:
+            # Handle Z suffix
+            if ts.endswith('Z'):
+                ts = ts[:-1] + '+00:00'
+            return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+        except ValueError:
+            try:
+                time_struct = time.strptime(ts, "%a %b %d %H:%M:%S +0000 %Y")
+                return datetime.fromtimestamp(time.mktime(time_struct)).replace(tzinfo=timezone.utc)
+            except ValueError:
+                logger.warning("Could not parse timestamp: %s", ts)
+                return None
 
 class BatchWriter:
     """Efficient batch writer for large datasets."""
@@ -86,7 +293,6 @@ class ArchiveProcessor:
         self.replies_file = output_dir / "reply_edges.jsonl"
         self.processed_archives_file = output_dir / "processed_archives.txt"
         self.processed_archives = set()
-        self.stats_manager = StatsManager(output_dir)
 
     def _load_processed_archives(self) -> Set[str]:
         """Load set of already processed archive filenames.

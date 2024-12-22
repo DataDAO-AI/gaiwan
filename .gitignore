@@ -10,3 +10,5 @@ pyvenv.*
 __pycache__
 .DS_STORE*
 share/
+venv/
+.*

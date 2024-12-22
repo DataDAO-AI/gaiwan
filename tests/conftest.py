@@ -1,66 +1,38 @@
-"""Common test fixtures and configuration."""
+"""Test fixtures and configuration."""
 
-import json
+import pytest
 from datetime import datetime, timezone
 from pathlib import Path
-import pytest
-from gaiwan.models import CanonicalTweet
-from gaiwan.config import MixPRConfig
-from gaiwan.models import UserSimilarityConfig
+
+from gaiwan.community_archiver import CanonicalTweet
+from gaiwan.mixpr import MixPRConfig
+from gaiwan.user_similarity import UserSimilarityConfig
 
 @pytest.fixture
 def sample_tweets():
     """Create sample tweets for testing."""
     return [
         CanonicalTweet(
-            id="1",
+            id="123",
+            text="Hello world! @user2 check this out",
             created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            text="Hello world!",
             entities={
-                "hashtags": [],
                 "user_mentions": [{"screen_name": "user2"}],
-                "urls": [],
-                "media": []
+                "urls": [{"expanded_url": "https://example.com"}]
             },
-            screen_name="user1",
-            favorite_count=5,
-            retweet_count=2,
-            possibly_sensitive=False,
-            source_type="tweet"
+            screen_name="user1"
+        ),
+        CanonicalTweet(
+            id="456",
+            text="@user1 Thanks for sharing!",
+            created_at=datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
+            entities={
+                "user_mentions": [{"screen_name": "user1"}]
+            },
+            screen_name="user2",
+            in_reply_to_status_id="123"
         )
     ]
-
-@pytest.fixture
-def sample_archive_data():
-    """Create sample archive data for testing."""
-    return {
-        "tweets": [{
-            "tweet": {
-                "id_str": "123",
-                "created_at": "Wed Mar 13 12:34:56 +0000 2024",
-                "full_text": "Regular tweet",
-                "favorite_count": "5",
-                "retweet_count": "2",
-                "entities": {}
-            }
-        }],
-        "community-tweet": [{
-            "tweet": {
-                "id_str": "456",
-                "created_at": "Wed Mar 13 12:34:56 +0000 2024",
-                "full_text": "Community tweet",
-                "entities": {}
-            }
-        }],
-        "note-tweet": [{
-            "noteTweet": {
-                "noteTweetId": "789",
-                "createdAt": "2024-03-13T12:34:56.000Z",
-                "text": "Note tweet",
-                "entities": {}
-            }
-        }]
-    }
 
 @pytest.fixture
 def mixpr_config():
@@ -73,13 +45,11 @@ def mixpr_config():
 
 @pytest.fixture
 def user_similarity_config():
-    """Create test configuration for user similarity."""
+    """Create user similarity configuration for testing."""
     return UserSimilarityConfig(
-        min_tweets_per_user=2,
-        min_likes_per_user=1,
-        mention_weight=0.7,
-        reply_weight=0.8,
-        quote_weight=0.6
+        ncd_weight=0.5,
+        interaction_weight=0.5,
+        min_tweets=1
     )
 
 def pytest_configure(config):
