@@ -10,7 +10,8 @@ from scipy import sparse
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 
-from .models import CanonicalTweet, MixPRConfig, RetrievalResult
+from .models import CanonicalTweet, RetrievalResult
+from .config import MixPRConfig
 
 logger = logging.getLogger(__name__)
 
@@ -82,42 +83,33 @@ class MixPR:
         )
 
     def _compute_adjacency_matrix(self) -> sparse.csr_matrix:
-        """
-        Compute and normalize the adjacency matrix combining text similarity,
-        tweet graph relationships, and user similarity.
-        """
-        # Compute text similarity matrix
+        """Compute adjacency matrix."""
         similarity_matrix = self.embeddings @ self.embeddings.T
         similarity_matrix = sparse.csr_matrix(similarity_matrix)
-        
-        # Create graph relationship matrix
+
         graph_matrix = sparse.lil_matrix((len(self.tweets), len(self.tweets)))
         for idx, tweet in enumerate(self.tweets):
             # Add reply relationships
-            if tweet.reply_to_tweet_id in self.tweet_id_to_idx:
-                reply_idx = self.tweet_id_to_idx[tweet.reply_to_tweet_id]
+            if tweet.in_reply_to_status_id in self.tweet_id_to_idx:
+                reply_idx = self.tweet_id_to_idx[tweet.in_reply_to_status_id]
                 graph_matrix[idx, reply_idx] = self.config.reply_weight
                 graph_matrix[reply_idx, idx] = self.config.reply_weight
-                
+
             # Add quote relationships
             if tweet.quoted_tweet_id in self.tweet_id_to_idx:
                 quote_idx = self.tweet_id_to_idx[tweet.quoted_tweet_id]
                 graph_matrix[idx, quote_idx] = self.config.quote_weight
                 graph_matrix[quote_idx, idx] = self.config.quote_weight
-                
+
             # Add user similarity relationships
-            if tweet.author_id and self.user_similarity_matrix is not None:
-                author_idx = self.user_to_idx.get(tweet.author_id)
-                if author_idx is not None:
-                    for other_idx in range(len(self.tweets)):
-                        other_tweet = self.tweets[other_idx]
-                        if other_tweet.author_id:
-                            other_author_idx = self.user_to_idx.get(other_tweet.author_id)
-                            if other_author_idx is not None:
-                                similarity = self.user_similarity_matrix[author_idx, other_author_idx]
-                                if similarity > 0:
-                                    graph_matrix[idx, other_idx] = similarity * self.config.user_similarity_weight
-        
+            if tweet.screen_name and self.user_similarity_matrix is not None:
+                user_idx = list(self.user_similarity_matrix.keys()).index(tweet.screen_name)
+                for other_idx, other_tweet in enumerate(self.tweets):
+                    if other_tweet.screen_name:
+                        other_user_idx = list(self.user_similarity_matrix.keys()).index(other_tweet.screen_name)
+                        sim = self.user_similarity_matrix[user_idx, other_user_idx]
+                        graph_matrix[idx, other_idx] = sim * self.config.user_similarity_weight
+
         # Combine matrices
         combined_matrix = (1 - self.config.graph_weight) * similarity_matrix + \
                          self.config.graph_weight * graph_matrix.tocsr()
@@ -163,15 +155,7 @@ class MixPR:
         return pi
 
     def _classify_query_type(self, tweet: CanonicalTweet) -> bool:
-        """
-        Classify if query requires local (True) or global (False) retrieval.
-
-        Args:
-            tweet: Query tweet
-
-        Returns:
-            True if query needs local context, False for global
-        """
+        """Classify if query requires local or global retrieval."""
         # Keywords suggesting specific information needs
         local_keywords = {
             'what', 'when', 'where', 'who', 'why', 'how',
@@ -186,7 +170,7 @@ class MixPR:
         is_reply = bool(tweet.reply_to_tweet_id)
 
         # Check for @mentions (suggesting conversation context needed)
-        has_mentions = bool(tweet.metadata.mentioned_users)
+        has_mentions = len(tweet.mentioned_users) > 0
 
         return has_question or is_reply or has_mentions
 

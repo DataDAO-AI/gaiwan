@@ -13,6 +13,9 @@ dependencies = [
     "scipy",
     "scikit-learn",
     "requests",
+    "jsonschema>=4.0.0",
+    "requests>=2.31.0",
+    "pytest-timeout>=2.1.0",
 ]
 
 [tool.pylint.messages_control]
@@ -37,3 +40,9 @@ addopts = "-v --cov=gaiwan --cov-report=term-missing"
 [tool.coverage.run]
 source = ["gaiwan"]
 omit = ["tests/*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: mark test as slow running",
+    "timeout: mark test to timeout after X seconds"
+]

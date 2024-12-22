@@ -10,4 +10,6 @@ pooch>=1.7.0
 ini2toml>=0.15
 jaraco.envs>=2.4.0
 jaraco.test>=5.3.0
-path>=16.7.1 
+path>=16.7.1
+pytz>=2023.3 
+jsonschema

@@ -3,249 +3,212 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Set, List
+from typing import Optional, Set, List, Dict, Any
 import re
 from time import strptime, mktime
 import os
+import pytz
+import logging
 
 @dataclass
 class TweetMetadata:
     """Metadata extracted from tweet entities."""
     mentioned_users: Set[str] = field(default_factory=set)
     hashtags: Set[str] = field(default_factory=set)
-    urls: Set[str] = field(default_factory=set)  # Expanded URLs
-    quoted_tweet_id: Optional[str] = None
-    is_retweet: bool = False
-    retweet_of_id: Optional[str] = None
-    media: List[dict] = field(default_factory=list)  # Raw media entities
+    urls: Set[str] = field(default_factory=set)
+    media_urls: List[str] = field(default_factory=list)
 
     @classmethod
-    def extract_from_text_and_entities(cls, text: str, entities: dict) -> 'TweetMetadata':
-        """Extract metadata from both tweet text and entities."""
+    def from_entities(cls, entities: dict) -> 'TweetMetadata':
+        """Create metadata from tweet entities following the schema."""
         metadata = cls()
         
-        # Extract from text first
-        if text:
-            # Check for retweet pattern
-            if re.search(r'RT\s*@\w+[:\s]', text, re.IGNORECASE):
-                metadata.is_retweet = True
-                rt_match = re.search(r'RT\s*@(\w+)[:\s]', text, re.IGNORECASE)
-                if rt_match:
-                    metadata.retweet_of_id = rt_match.group(1)
-
-            # Check for quoted tweet
-            if '/status/' in text:
-                quoted_match = re.search(r'/status/(\d+)', text)
-                if quoted_match:
-                    metadata.quoted_tweet_id = quoted_match.group(1)
-
-        # Extract from entities
-        if entities:
-            # User mentions
-            for mention in entities.get('user_mentions', []):
+        # Extract user mentions
+        for mention in entities.get('user_mentions', []):
+            if 'screen_name' in mention:
                 metadata.mentioned_users.add(mention['screen_name'].lower())
 
-            # Hashtags
-            for tag in entities.get('hashtags', []):
+        # Extract hashtags
+        for tag in entities.get('hashtags', []):
+            if 'text' in tag:
                 metadata.hashtags.add(tag['text'].lower())
 
-            # URLs
-            for url in entities.get('urls', []):
-                expanded_url = url.get('expanded_url')
-                if expanded_url:
-                    metadata.urls.add(expanded_url.split('?')[0])  # Remove query params
-
-            # Media
-            metadata.media.extend(entities.get('media', []))
-
-        return metadata
-
-    @classmethod
-    def extract_from_note_core(cls, core: dict) -> 'TweetMetadata':
-        """Extract metadata from note tweet core data."""
-        metadata = cls()
-        
-        # Extract mentions
-        for mention in core.get('mentions', []):
-            metadata.mentioned_users.add(mention['screenName'].lower())
-
-        # Extract hashtags
-        for tag in core.get('hashtags', []):
-            metadata.hashtags.add(tag['text'].lower())
-
         # Extract URLs
-        for url in core.get('urls', []):
-            expanded_url = url.get('expanded_url')
-            if expanded_url:
-                metadata.urls.add(expanded_url.split('?')[0])
+        for url in entities.get('urls', []):
+            if 'expanded_url' in url:
+                metadata.urls.add(url['expanded_url'])
+
+        # Extract media URLs
+        for media in entities.get('media', []):
+            if 'media_url_https' in media:
+                metadata.media_urls.append(media['media_url_https'])
 
         return metadata
 
-@dataclass
 class CanonicalTweet:
-    """Normalized tweet representation."""
-    id: str  # id_str from tweet or noteTweetId
-    text: str  # full_text from tweet or text from noteTweet.core
-    screen_name: str  # user.screen_name or derived from archive
-    created_at: datetime  # parsed from created_at or createdAt
-    user_id: Optional[str] = None  # user.id_str when available
-    reply_to_tweet_id: Optional[str] = None
-    metadata: TweetMetadata = field(default_factory=TweetMetadata)
-    quoted_tweet_id: Optional[str] = None
-    liked_by: Set[str] = field(default_factory=set)  # Set of screen_names
-    source_type: str = "tweet"  # "tweet", "community_tweet", "note_tweet", or "like"
-    media_urls: Set[str] = field(default_factory=set)
-    media_files: Set[str] = field(default_factory=set)
-    community_id: Optional[str] = None  # Only for community tweets
+    """Tweet model following the schema definition."""
+    def __init__(
+        self,
+        id: str,
+        created_at: datetime,
+        text: str,
+        entities: dict,
+        possibly_sensitive: Optional[bool] = None,
+        favorited: Optional[bool] = None,
+        retweeted: Optional[bool] = None,
+        retweet_count: Optional[int] = None,
+        favorite_count: Optional[int] = None,
+        in_reply_to_status_id: Optional[str] = None,
+        in_reply_to_user_id: Optional[str] = None,
+        in_reply_to_screen_name: Optional[str] = None,
+        screen_name: Optional[str] = None,
+        source_type: str = "tweet",
+        quoted_tweet_id: Optional[str] = None,
+        community_id: Optional[str] = None,
+    ):
+        # Required fields from schema
+        self.id = id
+        self.created_at = created_at
+        self.text = text
+        self.entities = entities
+        
+        # Optional fields from schema
+        self.possibly_sensitive = possibly_sensitive
+        self.favorited = favorited
+        self.retweeted = retweeted
+        self.retweet_count = retweet_count
+        self.favorite_count = favorite_count
+        self.in_reply_to_status_id = in_reply_to_status_id
+        self.in_reply_to_user_id = in_reply_to_user_id
+        self.in_reply_to_screen_name = in_reply_to_screen_name
+        self.screen_name = screen_name
+        self.source_type = source_type
+        self.quoted_tweet_id = quoted_tweet_id
+        self.community_id = community_id
+
+        # Initialize metadata first
+        self._metadata = TweetMetadata.from_entities(entities)
+        self._media_urls = self._metadata.media_urls  # Use metadata's media URLs
+        self.is_retweet = bool(self.retweeted or text.startswith('RT @'))
+        self.liked_by = set()  # For tracking who liked this tweet
+
+    @property
+    def metadata(self) -> TweetMetadata:
+        """Get tweet metadata."""
+        return self._metadata
+
+    @property
+    def media_urls(self) -> List[str]:
+        """Get media URLs from metadata."""
+        return self._media_urls
+
+    @property
+    def mentioned_users(self) -> Set[str]:
+        """Get mentioned users from metadata."""
+        return self._metadata.mentioned_users
+
+    @property
+    def reply_to_tweet_id(self) -> Optional[str]:
+        """Alias for in_reply_to_status_id."""
+        return self.in_reply_to_status_id
+
+    @property
+    def source(self) -> Optional[str]:
+        """Backward compatibility for source."""
+        return None  # Not in schema, return None
 
     @classmethod
-    def from_tweet_data(cls, tweet_data: dict, default_screen_name: str) -> 'CanonicalTweet':
-        """Create from regular or community tweet data."""
-        if 'tweet' in tweet_data:
-            tweet_data = tweet_data['tweet']
+    def from_dict(cls, data: dict, source_type: str = "tweet") -> Optional['CanonicalTweet']:
+        """Create tweet from dict following the schema."""
+        try:
+            # Required fields from schema
+            if not all(k in data for k in ['id_str', 'created_at', 'full_text', 'entities']):
+                return None
 
-        user_data = tweet_data.get('user', {})
-        screen_name = user_data.get('screen_name', default_screen_name).lower()
-        
-        return cls(
-            id=tweet_data['id_str'],
-            text=tweet_data.get('full_text', tweet_data.get('text', '')),
-            screen_name=screen_name,
-            created_at=parse_twitter_timestamp(tweet_data['created_at']),
-            user_id=user_data.get('id_str'),
-            reply_to_tweet_id=tweet_data.get('in_reply_to_status_id_str'),
-            metadata=TweetMetadata.extract_from_text_and_entities(
-                tweet_data.get('full_text', ''),
-                tweet_data.get('entities', {})
-            ),
-            community_id=tweet_data.get('community_id_str'),
-            source_type='community_tweet' if 'community_id_str' in tweet_data else 'tweet'
-        )
-
-    @classmethod
-    def from_note_data(cls, note_data: dict, default_screen_name: str) -> 'CanonicalTweet':
-        """Create from note tweet data."""
-        core = note_data.get('core', {})
-        return cls(
-            id=note_data['noteTweetId'],
-            text=core.get('text', ''),
-            screen_name=default_screen_name.lower(),
-            created_at=parse_twitter_timestamp(note_data['createdAt']),
-            metadata=TweetMetadata.extract_from_note_core(core),
-            source_type='note_tweet'
-        )
+            return cls(
+                id=data['id_str'],
+                created_at=parse_twitter_timestamp(data['created_at']),
+                text=data['full_text'],
+                entities=data.get('entities', {}),
+                possibly_sensitive=data.get('possibly_sensitive'),
+                favorited=data.get('favorited'),
+                retweeted=data.get('retweeted'),
+                retweet_count=int(data['retweet_count']) if 'retweet_count' in data else None,
+                favorite_count=int(data['favorite_count']) if 'favorite_count' in data else None,
+                in_reply_to_status_id=data.get('in_reply_to_status_id_str'),
+                in_reply_to_user_id=data.get('in_reply_to_user_id_str'),
+                in_reply_to_screen_name=data.get('in_reply_to_screen_name'),
+                screen_name=data.get('user', {}).get('screen_name'),
+                source_type=source_type,
+                quoted_tweet_id=data.get('quoted_status_id_str'),
+                community_id=data.get('community_id_str')
+            )
+        except Exception as e:
+            logger.error(f"Error creating tweet from data: {e}")
+            return None
 
     @classmethod
-    def from_like_data(cls, like_data: dict, user_id: str) -> 'CanonicalTweet':
-        """Create from like data."""
-        # The schema shows likes are nested under a 'like' key
-        if 'like' in like_data:
-            like_data = like_data['like']
-        
-        # Schema defines exactly these fields:
-        tweet_id = like_data['tweetId']
-        text = like_data['fullText']
-        expanded_url = like_data['expandedUrl']
-        
-        # Create timestamp from URL if possible
-        created_at = None
-        if expanded_url:
-            url_match = re.search(r'/status/\d+/(\d{4}/\d{2}/\d{2})', expanded_url)
-            if url_match:
-                try:
-                    created_at = datetime.strptime(
-                        url_match.group(1), 
-                        '%Y/%m/%d'
-                    ).replace(tzinfo=timezone.utc)
-                except ValueError:
-                    pass
+    def from_tweet_data(cls, data: dict, source_type: str = "tweet") -> Optional['CanonicalTweet']:
+        """Create from tweet data following the schema."""
+        try:
+            # Required fields from schema
+            if not all(k in data for k in ['id_str', 'created_at', 'full_text']):
+                return None
 
-        return cls(
-            id=tweet_id,
-            text=text,
-            screen_name=user_id.lower(),
-            created_at=created_at or datetime.now(timezone.utc),
-            source_type="like"
-        )
+            # Convert possibly_sensitive to proper boolean
+            possibly_sensitive = None
+            if 'possibly_sensitive' in data:
+                if isinstance(data['possibly_sensitive'], bool):
+                    possibly_sensitive = data['possibly_sensitive']
+                else:
+                    possibly_sensitive = str(data['possibly_sensitive']).lower() == 'true'
+
+            return cls(
+                id=data['id_str'],
+                created_at=parse_twitter_timestamp(data['created_at']),
+                text=data['full_text'],
+                entities=data.get('entities', {}),
+                possibly_sensitive=possibly_sensitive,  # Use converted value
+                favorited=data.get('favorited'),
+                retweeted=data.get('retweeted'),
+                retweet_count=int(data['retweet_count']) if 'retweet_count' in data else None,
+                favorite_count=int(data['favorite_count']) if 'favorite_count' in data else None,
+                in_reply_to_status_id=data.get('in_reply_to_status_id_str'),
+                in_reply_to_user_id=data.get('in_reply_to_user_id_str'),
+                in_reply_to_screen_name=data.get('in_reply_to_screen_name'),
+                screen_name=data.get('user', {}).get('screen_name'),
+                source_type=source_type,
+                quoted_tweet_id=data.get('quoted_status_id_str'),
+                community_id=data.get('community_id_str')
+            )
+        except Exception as e:
+            logger.error(f"Error creating tweet from data: {e}")
+            return None
 
     @classmethod
-    def from_archive_tweet(cls, tweet_data: dict, media_dir: str) -> 'CanonicalTweet':
-        """Enhanced factory method for archive tweets"""
-        # Basic tweet parsing
-        tweet = cls.from_tweet_data(tweet_data)
-        
-        # Add media handling
-        if 'extended_entities' in tweet_data:
-            for media in tweet_data['extended_entities'].get('media', []):
-                tweet.media_urls.add(media['media_url'])
-                
-                # Handle local files
-                media_file = os.path.join(media_dir, f"{tweet.id}_{media['id']}")
-                if os.path.exists(media_file):
-                    tweet.media_files.add(media_file)
-                    
-        return tweet
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for serialization."""
-        return {
-            "id": self.id,
-            "screen_name": self.screen_name,
-            "user_id": self.user_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "text": self.text,
-            "reply_to_tweet_id": self.reply_to_tweet_id,
-            "liked_by": list(self.liked_by),
-            "source_type": self.source_type,
-            "metadata": {
-                "mentioned_users": list(self.metadata.mentioned_users),
-                "hashtags": list(self.metadata.hashtags),
-                "urls": list(self.metadata.urls),
-                "quoted_tweet_id": self.metadata.quoted_tweet_id,
-                "is_retweet": self.metadata.is_retweet,
-                "retweet_of_id": self.metadata.retweet_of_id
-            },
-            "media_urls": list(self.media_urls),
-            "media_files": list(self.media_files),
-            "community_id": self.community_id
-        }
-
-@dataclass
-class MixPRConfig:
-    """Configuration for MixPR retrieval."""
-    local_alpha: float = 0.6
-    similarity_threshold: float = 0.27
-    max_iterations: int = 18
-    min_df: int = 2
-    max_df: float = 0.95
-    batch_size: int = 1000
-    graph_weight: float = 0.3  # Weight of graph relationships vs text similarity
-    reply_weight: float = 1.0  # Weight of reply edges
-    quote_weight: float = 0.8  # Weight of quote tweet edges
-    user_similarity_weight: float = 0.4  # Weight for user similarity edges
-    sibling_weight: float = 0.5  # Weight for sibling tweets (replies to same parent)
-    conversation_weight: float = 0.4  # Weight for conversation context vs basic similarity
+    def from_note_data(cls, data: dict, username: str = None) -> Optional['CanonicalTweet']:
+        """Create from note tweet data following the schema."""
+        try:
+            note = data.get('noteTweet', {})
+            core = note.get('core', {})
+            
+            return cls(
+                id=note.get('noteTweetId'),
+                created_at=parse_twitter_timestamp(note.get('createdAt')),
+                text=core.get('text', ''),
+                entities=core.get('entities', {}),
+                screen_name=username,
+                source_type='note'
+            )
+        except Exception as e:
+            logger.error(f"Error creating tweet from note data: {e}")
+            return None
 
 @dataclass
 class RetrievalResult:
     """Represents a retrieval result with relevance score."""
     tweet: CanonicalTweet
     score: float
-
-@dataclass
-class UserSimilarityConfig:
-    """Configuration for user similarity calculations."""
-    min_tweets_per_user: int = 5
-    min_likes_per_user: int = 3
-    mention_weight: float = 0.7
-    reply_weight: float = 0.8
-    quote_weight: float = 0.6
-    like_weight: float = 0.7
-    retweet_weight: float = 0.8
-    conversation_weight: float = 0.9
-    temporal_weight: float = 0.5
-    mutual_follow_weight: float = 0.8
-    ncd_threshold: float = 0.7
 
 def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
     """Convert Twitter's timestamp format to datetime."""

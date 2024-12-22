@@ -5,10 +5,12 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Dict, Any
 import json
+import os
 
 import requests
+import pytz
 
 from gaiwan.models import CanonicalTweet
 from gaiwan.stats_collector import StatsManager
@@ -132,131 +134,204 @@ class ArchiveProcessor:
                 data = json.load(f)
                 
             tweets = []
-            stats = {
-                'tweets': 0,
-                'community_tweets': 0,
-                'note_tweets': 0,
-                'likes': 0
-            }
             
-            # Handle regular tweets
-            if 'tweet' in data:
-                tweet_list = data['tweet']
-                if isinstance(tweet_list, dict):
-                    tweet_list = [tweet_list]
-                    
-                for tweet_data in tweet_list:
-                    tweet = CanonicalTweet.from_tweet_data(tweet_data, username)
-                    tweets.append(tweet)
-                    self.stats_manager.process_tweet(tweet)
-                    if tweet.source_type == 'community_tweet':
-                        stats['community_tweets'] += 1
-                    else:
-                        stats['tweets'] += 1
-                    
+            # Handle community tweets
+            if 'community-tweet' in data:
+                for tweet_wrapper in data['community-tweet']:
+                    if 'tweet' in tweet_wrapper:
+                        tweet = CanonicalTweet.from_tweet_data(
+                            tweet_wrapper['tweet'], 
+                            source_type='community'
+                        )
+                        if tweet and tweet.id:  # Ensure tweet has an ID
+                            tweets.append(tweet)
+                            
             # Handle note tweets
-            if 'noteTweet' in data:
-                note_list = data['noteTweet']
-                if isinstance(note_list, dict):
-                    note_list = [note_list]
-                    
-                for note_data in note_list:
-                    tweet = CanonicalTweet.from_note_data(note_data, username)
-                    tweets.append(tweet)
-                    self.stats_manager.process_tweet(tweet)
-                    stats['note_tweets'] += 1
-                    
-            # Handle likes
-            if 'like' in data:
-                like_list = data['like']
-                if isinstance(like_list, dict):
-                    like_list = [like_list]
-                    
-                for like_entry in like_list:
-                    if 'like' in like_entry:
-                        tweet = CanonicalTweet.from_like_data(like_entry, username)
-                        tweets.append(tweet)
-                        self.stats_manager.process_tweet(tweet)
-                        stats['likes'] += 1
-            
-            # Log summary statistics
-            logger.info(
-                f"Processed {username} archive: "
-                f"{stats['tweets']} tweets, "
-                f"{stats['community_tweets']} community tweets, "
-                f"{stats['note_tweets']} note tweets, "
-                f"{stats['likes']} likes"
-            )
-            
-            # Save stats after processing all tweets
-            self.stats_manager.save_stats(username)
-            self._mark_archive_processed(archive_path)
+            if 'note-tweet' in data:
+                for note_wrapper in data['note-tweet']:
+                    if 'noteTweet' in note_wrapper:
+                        tweet = CanonicalTweet.from_note_data(note_wrapper, username)
+                        if tweet and tweet.id:  # Ensure tweet has an ID
+                            tweets.append(tweet)
+                            
             return tweets
             
         except Exception as e:
-            logger.error(f"Error processing {archive_path}: {e}")
+            logger.error(f"Error processing {archive_path}: {str(e)}")
             return []
+
+    def _normalize_tweet_data(self, data: dict) -> Optional[dict]:
+        """Normalize tweet data to match schema."""
+        try:
+            # Handle nested tweet structure
+            if isinstance(data, dict):
+                if 'tweet' in data:
+                    return self._normalize_tweet_data(data['tweet'])
+                if 'noteTweet' in data:
+                    note = data['noteTweet']
+                    return {
+                        'id_str': note.get('noteTweetId'),
+                        'created_at': note.get('createdAt'),
+                        'full_text': note.get('core', {}).get('text', ''),
+                        'entities': note.get('core', {}).get('entities', {}),
+                        'user': {'screen_name': note.get('screenName', 'visakanv')}
+                    }
+                # Add screen_name if not present
+                if 'user' not in data:
+                    data = {**data, 'user': {'screen_name': 'visakanv'}}
+                return data
+        except Exception as e:
+            logger.error(f"Error normalizing tweet data: {e}")
+            return None
 
     def process_archive(self, archive_path: Path) -> List[CanonicalTweet]:
-        """Process a Twitter archive directory."""
-        if archive_path in self.processed_archives:
-            logger.warning(f"Archive {archive_path} has already been processed")
-            return []
-
+        """Process archive following the schema structure."""
         tweets = []
-        tweet_js = archive_path / "tweet.js"
         
-        if not tweet_js.exists():
-            logger.error(f"No tweet.js found in {archive_path}")
-            return []
-
         try:
-            with open(tweet_js) as f:
-                content = f.read()
-                logger.debug(f"Raw content: {content[:100]}...")  
-                
-                # Remove JS variable assignment more carefully
-                if content.startswith("window.YTD.tweet.part0 = "):
-                    content = content[len("window.YTD.tweet.part0 = "):]
-                    logger.debug("Removed JS prefix")
-                else:
-                    logger.debug("No JS prefix found")
+            # If it's a JSON file, process it directly
+            if archive_path.suffix == '.json':
+                logger.info(f"Processing JSON archive: {archive_path}")
+                with open(archive_path) as f:
+                    data = json.load(f)
+                    logger.debug(f"Archive data keys: {list(data.keys())}")
                     
-                data = json.loads(content)
-                logger.debug(f"Parsed data type: {type(data)}")
-                logger.debug(f"Parsed data: {data}")
-
-            # Handle both direct list and dict with 'tweet' key
-            if isinstance(data, dict) and 'tweet' in data:
-                tweet_list = data['tweet']
-            elif isinstance(data, list):
-                tweet_list = data
-            else:
-                logger.error(f"Unexpected data structure: {type(data)}")
-                return []
-
-            # Try to get username from the first tweet
-            try:
-                first_tweet = tweet_list[0]
-                if isinstance(first_tweet, dict) and 'tweet' in first_tweet:
-                    first_tweet = first_tweet['tweet']
-                username = first_tweet['user']['screen_name'].lower()
-            except (IndexError, KeyError):
-                username = archive_path.stem.replace('_archive', '').lower()
-                logger.warning(f"Could not find username in {archive_path}, using filename: {username}")
-
-            for tweet_data in data:
-                if not isinstance(tweet_data, dict) or 'tweet' not in tweet_data:
-                    continue
-                tweet = CanonicalTweet.from_tweet_data(tweet_data['tweet'], username)
-                tweets.append(tweet)
-
-            self.processed_archives.add(archive_path)
+                    # Process main tweets
+                    if 'tweets' in data:
+                        tweet_list = data['tweets']
+                        logger.info(f"Found {len(tweet_list)} tweets in archive")
+                        
+                        for tweet_wrapper in tweet_list:
+                            if 'tweet' in tweet_wrapper:
+                                tweet_data = tweet_wrapper['tweet']
+                                normalized_data = self._normalize_tweet_data(tweet_data)
+                                if normalized_data:
+                                    tweet = CanonicalTweet.from_dict(normalized_data)
+                                    if tweet and tweet.id:
+                                        tweets.append(tweet)
+                
+                    # Process community tweets
+                    if 'community-tweet' in data:
+                        community_tweets = data['community-tweet']
+                        logger.info(f"Found {len(community_tweets)} community tweets")
+                        
+                        for tweet_wrapper in community_tweets:
+                            if 'tweet' in tweet_wrapper:
+                                tweet_data = tweet_wrapper['tweet']
+                                normalized_data = self._normalize_tweet_data(tweet_data)
+                                if normalized_data:
+                                    tweet = CanonicalTweet.from_dict(normalized_data, source_type='community_tweet')
+                                    if tweet and tweet.id:
+                                        tweets.append(tweet)
+                
+                    # Process note tweets
+                    if 'note-tweet' in data:
+                        note_tweets = data['note-tweet']
+                        logger.info(f"Found {len(note_tweets)} note tweets")
+                        
+                        for note_wrapper in note_tweets:
+                            if 'noteTweet' in note_wrapper:
+                                tweet = CanonicalTweet.from_note_data(note_wrapper)
+                                if tweet and tweet.id:
+                                    tweets.append(tweet)
+                
+                    logger.info(f"Successfully processed {len(tweets)} total tweets")
+                    return tweets
+                
+            # Otherwise look for tweet.js
+            tweet_js = archive_path / "tweet.js"
+            if tweet_js.exists():
+                logger.info(f"Processing tweet.js file: {tweet_js}")
+                with open(tweet_js) as f:
+                    content = f.read()
+                    if content.startswith('window.YTD.tweet.part0 = '):
+                        content = content.replace('window.YTD.tweet.part0 = ', '')
+                    
+                    data = json.loads(content)
+                    tweet_list = data.get('tweet', []) if isinstance(data, dict) else data
+                    
+                    for raw_tweet in tweet_list:
+                        normalized_data = self._normalize_tweet_data(raw_tweet)
+                        if normalized_data:
+                            tweet = CanonicalTweet.from_dict(normalized_data)
+                            if tweet and tweet.id:
+                                tweets.append(tweet)
+            
             return tweets
-
+            
         except Exception as e:
             logger.error(f"Error processing archive {archive_path}: {e}")
             return []
+
+    def process_note_tweets(self, note_tweets_data, username):
+        for note_tweet in note_tweets_data:
+            try:
+                note_data = note_tweet.get('noteTweet', {})
+                updated_at = CanonicalTweet.parse_twitter_datetime(note_data['updatedAt'])
+                
+                # Now both datetimes are timezone-aware for comparison
+                # ... rest of the processing ...
+                
+            except Exception as e:
+                self.logger.error(f"Error processing note tweet {i} for {username}: {str(e)}\nNote data: {json.dumps(note_tweet, indent=2)[:500]}...")
+
+    def _process_note_tweets(self, note_tweets: List[Dict], username: str) -> List[Dict]:
+        """Process note tweets from the archive."""
+        processed_notes = []
+        for i, note_tweet in enumerate(note_tweets):
+            try:
+                # Process note tweet
+                processed_note = self._process_single_note_tweet(note_tweet)
+                if processed_note:
+                    processed_notes.append(processed_note)
+            except Exception as e:
+                self.logger.error(f"Error processing note tweet {i} for {username}: {str(e)}\nNote data: {json.dumps(note_tweet, indent=2)[:500]}...")
+                continue
+        return processed_notes
+
+    def process_tweet(self, tweet_data: dict, source_type: str) -> Optional[CanonicalTweet]:
+        """Process any tweet type into canonical form."""
+        try:
+            if source_type == "community_tweet":
+                # Keep community_tweet as source_type
+                return CanonicalTweet.from_tweet_data(tweet_data, source_type="community_tweet")
+            elif source_type == "note":
+                return CanonicalTweet.from_note_data(tweet_data)
+            else:
+                return CanonicalTweet.from_tweet_data(tweet_data, source_type="tweet")
+        except Exception as e:
+            logger.error(f"Error processing {source_type}: {str(e)}\nTweet data: {json.dumps(tweet_data, indent=2)[:500]}...")
+            return None
+
+    def _create_tweet_from_data(self, tweet_data: dict) -> Optional[CanonicalTweet]:
+        """Create CanonicalTweet from raw tweet data."""
+        try:
+            # Ensure required fields exist
+            if not all(k in tweet_data for k in ['id_str', 'created_at', 'full_text', 'entities']):
+                logger.warning(f"Missing required fields in tweet data: {tweet_data}")
+                return None
+            
+            return CanonicalTweet(
+                id=tweet_data['id_str'],
+                created_at=parse_twitter_timestamp(tweet_data['created_at']),
+                text=tweet_data['full_text'],
+                entities=tweet_data.get('entities', {}),
+                possibly_sensitive=tweet_data.get('possibly_sensitive'),
+                favorited=tweet_data.get('favorited'),
+                retweeted=tweet_data.get('retweeted'),
+                retweet_count=int(tweet_data['retweet_count']) if 'retweet_count' in tweet_data else None,
+                favorite_count=int(tweet_data['favorite_count']) if 'favorite_count' in tweet_data else None,
+                reply_to_tweet_id=tweet_data.get('in_reply_to_status_id_str'),
+                reply_to_user_id=tweet_data.get('in_reply_to_user_id_str'),
+                reply_to_screen_name=tweet_data.get('in_reply_to_screen_name'),
+                screen_name=tweet_data.get('user', {}).get('screen_name'),
+                is_retweet='retweeted_status' in tweet_data,
+                retweet_of_id=tweet_data.get('retweeted_status', {}).get('id_str'),
+                quoted_tweet_id=tweet_data.get('quoted_status_id_str')
+            )
+        except Exception as e:
+            logger.error(f"Error creating tweet from data: {e}")
+            return None
 
 def parse_twitter_timestamp(ts: str) -> Optional[datetime]:
     """Convert Twitter's timestamp format to datetime.
@@ -324,7 +399,7 @@ def download_archive(username: str, output_dir: Path) -> Optional[Path]:
         logger.info("Downloading archive for %s", username)
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-
+        
         output_dir.mkdir(parents=True, exist_ok=True)
         output_file.write_bytes(response.content)
 
