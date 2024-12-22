@@ -304,17 +304,27 @@ class ArchiveProcessor:
         return processed_notes
 
     def process_tweet(self, tweet_data: dict, source_type: str) -> Optional[CanonicalTweet]:
-        """Process any tweet type into canonical form."""
+        """Process any tweet type into canonical form.
+        
+        Args:
+            tweet_data: Raw tweet data
+            source_type: Type of tweet ("tweet", "community_tweet", "note")
+            
+        Returns:
+            CanonicalTweet instance or None if invalid
+        """
         try:
-            if source_type == "community_tweet":
-                # Keep community_tweet as source_type
-                return CanonicalTweet.from_tweet_data(tweet_data, source_type="community_tweet")
-            elif source_type == "note":
+            if source_type == "note":
+                # For note tweets, we need to handle the noteTweet wrapper
+                if 'noteTweet' not in tweet_data:
+                    logger.warning("Missing noteTweet wrapper in note tweet data")
+                    return None
                 return CanonicalTweet.from_note_data(tweet_data)
             else:
-                return CanonicalTweet.from_tweet_data(tweet_data, source_type="tweet")
+                # Regular and community tweets use from_dict
+                return CanonicalTweet.from_dict(tweet_data, source_type=source_type)
         except Exception as e:
-            logger.error(f"Error processing {source_type}: {str(e)}\nTweet data: {json.dumps(tweet_data, indent=2)[:500]}...")
+            logger.error(f"Error processing {source_type}: {str(e)}")
             return None
 
     def _create_tweet_from_data(self, tweet_data: dict) -> Optional[CanonicalTweet]:
