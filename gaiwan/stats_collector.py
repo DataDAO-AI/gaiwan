@@ -89,58 +89,42 @@ class ArchiveStats:
             self.total_tweets += 1
         elif tweet.source_type == 'community_tweet':
             self.total_community_tweets += 1
-            if tweet.community_id:
-                self.communities[tweet.community_id] += 1
         elif tweet.source_type == 'note':
             self.total_note_tweets += 1
-        elif tweet.source_type == 'like':
-            self.total_likes += 1
-
-        if tweet.reply_to_tweet_id:
+        
+        # Handle replies
+        if tweet.in_reply_to_status_id:
             self.total_replies += 1
-            if tweet.author_id:
-                self.replied_to_users[tweet.author_id] += 1
-
-        if tweet.metadata.is_retweet:
+            if tweet.in_reply_to_screen_name:
+                self.replied_to_users[tweet.in_reply_to_screen_name] += 1
+        
+        # Handle retweets
+        if tweet.is_retweet:
             self.total_retweets += 1
-            if tweet.metadata.retweet_of_id:
-                self.retweeted_users[tweet.metadata.retweet_of_id] += 1
-
-        if tweet.metadata.quoted_tweet_id:
+            if tweet.retweet_of_id:
+                self.retweeted_users[tweet.retweet_of_id] += 1
+        
+        # Handle quotes
+        if tweet.quoted_tweet_id:
             self.total_quotes += 1
-
+        
         # Update temporal stats
         if tweet.created_at:
             if not self.first_tweet_date or tweet.created_at < self.first_tweet_date:
                 self.first_tweet_date = tweet.created_at
             if not self.last_tweet_date or tweet.created_at > self.last_tweet_date:
                 self.last_tweet_date = tweet.created_at
-
+            
             self.tweets_by_hour[tweet.created_at.hour] += 1
             self.tweets_by_dow[tweet.created_at.strftime('%A')] += 1
             self.tweets_by_month[tweet.created_at.strftime('%Y-%m')] += 1
-
+        
         # Content stats
         self.tweet_lengths.append(len(tweet.text))
-        self.hashtag_usage.update(tweet.metadata.hashtags)
-        self.mentioned_users.update(tweet.metadata.mentioned_users)
-
-        # Process URLs
-        for url in tweet.metadata.urls:
-            try:
-                domain = urlparse(url).netloc
-                self.domains_shared[domain] += 1
-            except Exception:
-                continue
-
-        # Process media
-        for media in tweet.metadata.media:
-            media_type = media.get('type', 'unknown')
-            self.media_counts[media_type] += 1
-            self.media_by_type[media_type].append(media)
-
-        # Update likes
-        self.total_likes += len(tweet.liked_by)
+        for entity in tweet.entities.get('hashtags', []):
+            self.hashtag_usage[entity['text']] += 1
+        for entity in tweet.entities.get('user_mentions', []):
+            self.mentioned_users[entity['screen_name']] += 1
 
     def generate_summary(self) -> dict:
         """Generate a summary dictionary of the collected stats."""
@@ -233,11 +217,15 @@ class StatsManager:
     
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
+        self.stats_dir = output_dir / "stats"
         self.current_stats = {}
         
     def process_tweet(self, tweet: CanonicalTweet) -> None:
         """Process a tweet and update statistics."""
         username = tweet.screen_name
+        if not username:
+            return
+        
         if username not in self.current_stats:
             self.current_stats[username] = {
                 "tweet_count": 0,
@@ -258,23 +246,23 @@ class StatsManager:
             
         stats = self.current_stats[username]
         stats["tweet_count"] += 1
+        stats["media_count"] += len(tweet.metadata.media_urls)
         
-        if tweet.reply_to_tweet_id:
+        if tweet.in_reply_to_status_id:
             stats["reply_count"] += 1
             
-        if tweet.metadata.is_retweet:
+        if tweet.is_retweet:
             stats["retweet_count"] += 1
             
-        if tweet.metadata.quoted_tweet_id:
+        if tweet.quoted_tweet_id:
             stats["quote_count"] += 1
             
         if tweet.source_type == "like":
             stats["like_count"] += 1
             
-        stats["media_count"] += len(tweet.media_urls)
-        stats["hashtag_count"] += len(tweet.metadata.hashtags)
-        stats["mention_count"] += len(tweet.metadata.mentioned_users)
-        stats["url_count"] += len(tweet.metadata.urls)
+        stats["hashtag_count"] += len(tweet.entities.get('hashtags', []))
+        stats["mention_count"] += len(tweet.entities.get('user_mentions', []))
+        stats["url_count"] += len(tweet.entities.get('urls', []))
         
         # Update timestamp ranges
         if tweet.created_at:
@@ -284,10 +272,12 @@ class StatsManager:
                 stats["last_tweet_at"] = tweet.created_at
                 
         # Update sets
-        stats["hashtags"].update(tweet.metadata.hashtags)
-        stats["mentioned_users"].update(tweet.metadata.mentioned_users)
+        stats["hashtags"].update(h['text'] for h in tweet.entities.get('hashtags', []))
+        stats["mentioned_users"].update(m['screen_name'] for m in tweet.entities.get('user_mentions', []))
         stats["domains"].update(
-            self._extract_domain(url) for url in tweet.metadata.urls
+            urlparse(u['expanded_url']).netloc 
+            for u in tweet.entities.get('urls', [])
+            if 'expanded_url' in u
         )
         
     def save_stats(self, username: str) -> None:
@@ -366,3 +356,21 @@ class StatsManager:
                     for tweet in stats.tweets_with_media:
                         for media_file in tweet.media_files:
                             f.write(f"![{media_file}]({media_file})\n")
+
+    def process_tweets(self, tweets: List[CanonicalTweet]) -> None:
+        """Process a list of tweets."""
+        for tweet in tweets:
+            self.process_tweet(tweet)
+            
+    def process_archive(self, archive_path: Path, tweets: List[CanonicalTweet]) -> None:
+        """Process an archive and its tweets."""
+        self.process_tweets(tweets)
+        
+        # Create stats directory if it doesn't exist
+        stats_dir = self.output_dir / "stats"
+        stats_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save stats file
+        stats_file = stats_dir / f"{archive_path.stem}_stats.json"
+        with open(stats_file, 'w') as f:
+            json.dump(self.current_stats, f, indent=2, default=str)

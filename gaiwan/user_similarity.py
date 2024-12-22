@@ -12,6 +12,7 @@ from scipy import sparse
 import math
 
 from .models import CanonicalTweet
+from .config import UserSimilarityConfig
 
 logger = logging.getLogger(__name__)
 
@@ -56,34 +57,29 @@ class UserSimilarityGraph:
         
     def add_tweet(self, tweet: CanonicalTweet) -> None:
         """Add a tweet to the appropriate user collections."""
-        if tweet.author_id:
-            self.user_tweets[tweet.author_id].append(tweet)
-            if tweet.author_id not in self.like_counts:
-                self.like_counts[tweet.author_id] = 0
-            if tweet.author_id not in self.tweet_counts:
-                self.tweet_counts[tweet.author_id] = 0
-            self.tweet_counts[tweet.author_id] += 1
+        if tweet.screen_name:
+            self.user_tweets[tweet.screen_name].append(tweet)
+            self.tweet_counts[tweet.screen_name] = self.tweet_counts.get(tweet.screen_name, 0) + 1
             
+            if tweet.source_type == 'community_tweet' and tweet.community_id:
+                self.user_communities[tweet.screen_name].add(tweet.community_id)
+            
+            for media in tweet.entities.get('media', []):
+                self.user_media_types[tweet.screen_name][media.get('type', 'unknown')] += 1
+            
+            for url in tweet.entities.get('urls', []):
+                try:
+                    domain = urlparse(url.get('expanded_url', '')).netloc
+                    self.user_domains[tweet.screen_name][domain] += 1
+                except Exception:
+                    continue
+
         for liker in tweet.liked_by:
             self.user_likes[liker].append(tweet)
             if liker not in self.like_counts:
                 self.like_counts[liker] = 0
             self.like_counts[liker] += 1
             
-        if tweet.author_id:
-            if tweet.source_type == 'community_tweet' and tweet.community_id:
-                self.user_communities[tweet.author_id].add(tweet.community_id)
-            
-            for media in tweet.metadata.media:
-                self.user_media_types[tweet.author_id][media.get('type', 'unknown')] += 1
-            
-            for url in tweet.metadata.urls:
-                try:
-                    domain = urlparse(url).netloc
-                    self.user_domains[tweet.author_id][domain] += 1
-                except Exception:
-                    continue
-
     def add_social_data(self, user_id: str, followers: Set[str], following: Set[str],
                        tweet_count: int, like_count: int) -> None:
         """Add social graph data for a user."""
