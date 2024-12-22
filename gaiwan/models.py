@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Set, List, Dict, Any
+from typing import Optional, Set, List, Dict, Any, ClassVar
 import re
 from time import strptime, mktime
 import os
@@ -50,6 +50,21 @@ class TweetMetadata:
 
 class CanonicalTweet:
     """Tweet model following the schema definition."""
+    
+    # Add class-level constants for required fields
+    REQUIRED_FIELDS: ClassVar[Set[str]] = {
+        'id', 'created_at', 'text', 'entities'
+    }
+    
+    # Add timestamp format patterns
+    TIMESTAMP_FORMATS: ClassVar[List[str]] = [
+        # ISO format with timezone
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        # Twitter's historical format
+        "%a %b %d %H:%M:%S +0000 %Y"
+    ]
+
     __slots__ = (
         'id', 'created_at', 'text', 'entities', 'possibly_sensitive',
         'favorited', 'retweeted', 'retweet_count', 'favorite_count',
@@ -129,23 +144,85 @@ class CanonicalTweet:
         return None  # Not in schema, return None
 
     @classmethod
-    def from_dict(cls, data: dict, source_type: str = "tweet") -> Optional['CanonicalTweet']:
-        """Create tweet from dict following the schema."""
+    def parse_timestamp(cls, ts: str) -> Optional[datetime]:
+        """Parse timestamp from multiple possible formats.
+        
+        Args:
+            ts: Timestamp string in various possible formats
+            
+        Returns:
+            Parsed datetime in UTC, or None if parsing fails
+        """
+        if not ts:
+            return None
+            
+        # Handle Z suffix
+        if ts.endswith('Z'):
+            ts = ts[:-1] + '+00:00'
+            
+        # Try each format
+        for fmt in cls.TIMESTAMP_FORMATS:
+            try:
+                dt = datetime.strptime(ts, fmt)
+                # Ensure UTC timezone
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except ValueError:
+                continue
+                
+        logger.warning(f"Could not parse timestamp: {ts}")
+        return None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any], source_type: str = "tweet") -> Optional['CanonicalTweet']:
+        """Create tweet from dict following the schema.
+        
+        Args:
+            data: Raw tweet data dictionary
+            source_type: Type of tweet source ("tweet", "community_tweet", "note")
+            
+        Returns:
+            CanonicalTweet instance or None if invalid
+        """
         try:
-            # Required fields from schema
-            if not all(k in data for k in ['id_str', 'created_at', 'full_text', 'entities']):
+            # Handle nested tweet structure first
+            if 'tweet' in data:
+                data = data['tweet']
+
+            # Extract core fields with proper fallbacks
+            tweet_id = cls._get_required_field(data, 'id')
+            created_at = cls.parse_timestamp(cls._get_required_field(data, 'created_at'))
+            text = cls._get_required_field(data, 'text')
+            entities = cls._get_required_field(data, 'entities')
+
+            if not all([tweet_id, created_at, text]):
+                logger.warning(f"Missing required fields in {source_type} data")
                 return None
 
+            # Convert numeric fields
+            try:
+                retweet_count = int(data['retweet_count']) if 'retweet_count' in data else None
+                favorite_count = int(data['favorite_count']) if 'favorite_count' in data else None
+            except (ValueError, TypeError):
+                retweet_count = None
+                favorite_count = None
+
+            # Convert boolean fields
+            possibly_sensitive = data.get('possibly_sensitive')
+            if isinstance(possibly_sensitive, str):
+                possibly_sensitive = possibly_sensitive.lower() == 'true'
+
             return cls(
-                id=data['id_str'],
-                created_at=parse_twitter_timestamp(data['created_at']),
-                text=data['full_text'],
-                entities=data.get('entities', {}),
-                possibly_sensitive=data.get('possibly_sensitive'),
+                id=tweet_id,
+                created_at=created_at,
+                text=text,
+                entities=entities or {},
+                possibly_sensitive=possibly_sensitive,
                 favorited=data.get('favorited'),
                 retweeted=data.get('retweeted'),
-                retweet_count=int(data['retweet_count']) if 'retweet_count' in data else None,
-                favorite_count=int(data['favorite_count']) if 'favorite_count' in data else None,
+                retweet_count=retweet_count,
+                favorite_count=favorite_count,
                 in_reply_to_status_id=data.get('in_reply_to_status_id_str'),
                 in_reply_to_user_id=data.get('in_reply_to_user_id_str'),
                 in_reply_to_screen_name=data.get('in_reply_to_screen_name'),
@@ -155,58 +232,31 @@ class CanonicalTweet:
                 community_id=data.get('community_id_str')
             )
         except Exception as e:
-            logger.error(f"Error creating tweet from data: {e}")
+            logger.error(f"Error creating {source_type} from data: {e}")
             return None
 
-    @classmethod
-    def from_tweet_data(cls, data: dict, source_type: str = "tweet") -> Optional['CanonicalTweet']:
-        """Create from tweet data following the schema."""
-        try:
-            # Required fields from schema
-            if not all(k in data for k in ['id_str', 'created_at', 'full_text']):
-                return None
-
-            # Convert possibly_sensitive to proper boolean
-            possibly_sensitive = None
-            if 'possibly_sensitive' in data:
-                if isinstance(data['possibly_sensitive'], bool):
-                    possibly_sensitive = data['possibly_sensitive']
-                else:
-                    possibly_sensitive = str(data['possibly_sensitive']).lower() == 'true'
-
-            return cls(
-                id=data['id_str'],
-                created_at=parse_twitter_timestamp(data['created_at']),
-                text=data['full_text'],
-                entities=data.get('entities', {}),
-                possibly_sensitive=possibly_sensitive,  # Use converted value
-                favorited=data.get('favorited'),
-                retweeted=data.get('retweeted'),
-                retweet_count=int(data['retweet_count']) if 'retweet_count' in data else None,
-                favorite_count=int(data['favorite_count']) if 'favorite_count' in data else None,
-                in_reply_to_status_id=data.get('in_reply_to_status_id_str'),
-                in_reply_to_user_id=data.get('in_reply_to_user_id_str'),
-                in_reply_to_screen_name=data.get('in_reply_to_screen_name'),
-                screen_name=data.get('user', {}).get('screen_name'),
-                source_type=source_type,
-                quoted_tweet_id=data.get('quoted_status_id_str'),
-                community_id=data.get('community_id_str')
-            )
-        except Exception as e:
-            logger.error(f"Error creating tweet from data: {e}")
-            return None
-
-    @classmethod
-    def from_note_data(cls, data: dict, username: str = None) -> Optional['CanonicalTweet']:
-        """Create from note tweet data following the schema."""
+    @classmethod 
+    def from_note_data(cls, data: Dict[str, Any], username: Optional[str] = None) -> Optional['CanonicalTweet']:
+        """Create from note tweet data following the schema.
+        
+        Args:
+            data: Raw note tweet data
+            username: Optional username for the tweet
+            
+        Returns:
+            CanonicalTweet instance or None if invalid
+        """
         try:
             note = data.get('noteTweet', {})
             core = note.get('core', {})
             
+            if not all([note.get('noteTweetId'), note.get('createdAt'), core.get('text')]):
+                return None
+                
             return cls(
-                id=note.get('noteTweetId'),
-                created_at=parse_twitter_timestamp(note.get('createdAt')),
-                text=core.get('text', ''),
+                id=note['noteTweetId'],
+                created_at=cls.parse_timestamp(note['createdAt']),
+                text=core['text'],
                 entities=core.get('entities', {}),
                 screen_name=username,
                 source_type='note'
@@ -214,6 +264,26 @@ class CanonicalTweet:
         except Exception as e:
             logger.error(f"Error creating tweet from note data: {e}")
             return None
+
+    @staticmethod
+    def _get_required_field(data: Dict[str, Any], field: str) -> Any:
+        """Get required field value with proper fallbacks."""
+        # Handle field aliases
+        if field == 'id':
+            return data.get('id_str') or data.get('id')
+        if field == 'text':
+            return data.get('full_text') or data.get('text')
+        if field == 'created_at':
+            return data.get('created_at')
+        if field == 'entities':
+            return data.get('entities', {})
+        
+        return data.get(field)
+
+    @classmethod
+    def from_tweet_data(cls, data: Dict[str, Any], source_type: str = "tweet") -> Optional['CanonicalTweet']:
+        """Alias for from_dict for backward compatibility."""
+        return cls.from_dict(data, source_type)
 
 @dataclass
 class RetrievalResult:

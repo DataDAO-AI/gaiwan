@@ -64,11 +64,13 @@ def test_end_to_end_processing(
     tweet_data = {
         "tweet": [
             {
-                "id_str": "123456789",
-                "created_at": "Wed Oct 10 20:19:24 +0000 2018",
-                "full_text": "Hello world! #testing @user1",
-                "entities": {},
-                "user": {"screen_name": "testuser"}
+                "tweet": {  # Add tweet wrapper to match schema
+                    "id_str": "123456789",
+                    "created_at": "Wed Oct 10 20:19:24 +0000 2018",
+                    "full_text": "Hello world! #testing @user1",
+                    "entities": {},
+                    "user": {"screen_name": "testuser"}
+                }
             }
         ]
     }
@@ -78,8 +80,8 @@ def test_end_to_end_processing(
     processor = ArchiveProcessor(output_dir)
     tweets = processor.process_archive(sample_archive_path)
     
-    # Basic assertions
     assert len(tweets) > 0
+    assert tweets[0].id == "123456789"
 
 def test_mixpr_retrieval(tmp_path: Path):
     """Test MixPR retrieval system."""

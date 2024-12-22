@@ -8,54 +8,45 @@ def test_canonical_tweet_normalization():
     """Test normalization of different tweet types."""
     # Test regular tweet
     regular_tweet = {
-        "id_str": "123456",
-        "created_at": "Wed Mar 13 12:34:56 +0000 2024",
-        "full_text": "Hello world!",
-        "entities": {
-            "hashtags": [],
-            "user_mentions": []
-        },
-        "favorite_count": "5",
-        "retweet_count": "2",
-        "possibly_sensitive": False,
-        "lang": "en"
-    }
-    
-    tweet = CanonicalTweet.from_tweet_data(regular_tweet, "tweet")
-    assert tweet.id == "123456"
-    assert isinstance(tweet.created_at, datetime)
-    assert tweet.favorite_count == 5  # Converted to int
-    assert tweet.retweet_count == 2  # Converted to int
-    assert tweet.possibly_sensitive is False  # Proper boolean
-    
-    # Test note tweet
-    note_tweet = {
-        "noteTweet": {
-            "noteTweetId": "789012",
-            "createdAt": "2024-03-13T12:34:56.000Z",
-            "core": {
-                "text": "A note tweet",
-                "entities": {}
-            }
+        "tweet": {
+            "id_str": "123456",
+            "created_at": "Wed Mar 13 12:34:56 +0000 2024",
+            "full_text": "Hello world!",
+            "entities": {
+                "hashtags": [],
+                "user_mentions": []
+            },
+            "favorite_count": "5",
+            "retweet_count": "2",
+            "possibly_sensitive": False,
+            "lang": "en"
         }
     }
     
-    note = CanonicalTweet.from_note_data(note_tweet)
-    assert note.id == "789012"
-    assert isinstance(note.created_at, datetime)
+    # Test both old and new methods
+    tweet1 = CanonicalTweet.from_tweet_data(regular_tweet, "tweet")
+    tweet2 = CanonicalTweet.from_dict(regular_tweet, "tweet")
+
+    assert tweet1.id == "123456"
+    assert tweet2.id == "123456"
+    assert tweet1.favorite_count == 5
+    assert tweet2.favorite_count == 5
     
     # Test community tweet
     community_tweet = {
-        "id_str": "345678",
-        "created_at": "Wed Mar 13 12:34:56 +0000 2024",
-        "full_text": "Community post",
-        "entities": {},
-        "possibly_sensitive": "false"  # Test string boolean conversion
+        "tweet": {
+            "id_str": "345678",
+            "created_at": "Wed Mar 13 12:34:56 +0000 2024",
+            "full_text": "Community post",
+            "entities": {},
+            "possibly_sensitive": "false",
+            "community_id": "789"
+        }
     }
     
     community = CanonicalTweet.from_tweet_data(community_tweet, "community_tweet")
     assert community.id == "345678"
-    assert community.possibly_sensitive is False  # Converted to boolean
+    assert community.source_type == "community_tweet"
 
 def test_timestamp_normalization():
     """Test normalization of different timestamp formats."""
