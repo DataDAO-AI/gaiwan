@@ -3,7 +3,19 @@
 import pytest
 import numpy as np
 from scipy import sparse
-from gaiwan.user_similarity import UserSimilarityGraph
+from gaiwan.user_similarity import UserSimilarityGraph, UserSimilarityConfig
+
+@pytest.fixture
+def user_similarity_config():
+    """Create a UserSimilarity configuration for testing."""
+    return UserSimilarityConfig(
+        min_tweets_per_user=2,
+        min_likes_per_user=1,
+        mention_weight=0.7,
+        reply_weight=0.8,
+        quote_weight=0.6,
+        ncd_threshold=0.7
+    )
 
 def test_user_similarity_initialization(user_similarity_config):
     """Test UserSimilarityGraph initialization."""
