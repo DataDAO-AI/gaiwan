@@ -2,8 +2,7 @@
 
 import pytest
 from datetime import datetime, timezone
-from gaiwan.models import CanonicalTweet, TweetMetadata, MixPRConfig
-from gaiwan.user_similarity import UserSimilarityConfig
+from gaiwan.models import CanonicalTweet, TweetMetadata, MixPRConfig, UserSimilarityConfig
 
 @pytest.fixture
 def sample_tweets():
@@ -14,7 +13,11 @@ def sample_tweets():
             text="Hello world! @user2 check this out",
             author_id="user1",
             created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            metadata=TweetMetadata.extract_from_text("Hello world! @user2 check this out")
+            metadata=TweetMetadata(
+                mentioned_users={"user2"},
+                hashtags=set(),
+                urls=set()
+            )
         ),
         CanonicalTweet(
             id="2",
@@ -22,14 +25,22 @@ def sample_tweets():
             author_id="user2",
             created_at=datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
             reply_to_tweet_id="1",
-            metadata=TweetMetadata.extract_from_text("@user1 Nice tweet! #testing")
+            metadata=TweetMetadata(
+                mentioned_users={"user1"},
+                hashtags={"testing"},
+                urls=set()
+            )
         ),
         CanonicalTweet(
             id="3",
             text="Interesting discussion https://example.com",
             author_id="user3",
             created_at=datetime(2024, 1, 1, 2, tzinfo=timezone.utc),
-            metadata=TweetMetadata.extract_from_text("Interesting discussion https://example.com")
+            metadata=TweetMetadata(
+                mentioned_users=set(),
+                hashtags=set(),
+                urls={"https://example.com"}
+            )
         )
     ]
     return tweets
@@ -60,4 +71,4 @@ def user_similarity_config():
         reply_weight=0.8,
         quote_weight=0.6,
         ncd_threshold=0.7
-    ) 
+    )

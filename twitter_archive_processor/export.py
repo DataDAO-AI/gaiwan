@@ -11,11 +11,12 @@ from twitter_archive_processor.transformation import format_conversation
 from twitter_archive_processor.utilities import clean_text
 
 from twitter_archive_processor.coretypes import ConvoThread, MediaFile, Tweet
+from gaiwan.models import CanonicalTweet
 
 logger = logging.getLogger(__name__)
 
 def save_convo_threads_as_markdown(
-        conversation_threads: list[ConvoThread], output_folder: str, images_folder: str):
+        conversation_threads: list[CanonicalTweet], output_folder: str, images_folder: str):
     """ save conversation threads as markdown text """
     if not conversation_threads.contents:
         return
@@ -52,7 +53,7 @@ def save_convo_threads_as_markdown(
         f.write(tweet_link)
 
 def save_conversations_to_jsonl(
-        conversation_threads: list[ConvoThread],
+        conversation_threads: list[CanonicalTweet],
         conversations: list[list[Content]],
         output_folder: str):
     """ save conversation threads in jsonl file """
@@ -79,7 +80,7 @@ def process_media_files(media_files: list[MediaFile], images_folder: str) -> lis
             logger.warning("Missing media file: '%s'", mf.path)
     return links
 
-def save_tweets_by_date(tweets: list[Tweet], output_folder: str, images_folder: str):
+def save_tweets_by_date(tweets: list[CanonicalTweet], output_folder: str, images_folder: str):
     """ save tweets grouped by date """
     tweet_ids = {c.id for t in tweets for c in t.contents}
 

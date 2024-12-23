@@ -16,6 +16,7 @@ from gaiwan.models import CanonicalTweet
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class ArchiveStats:
     """Statistics collected from processing Twitter archives."""

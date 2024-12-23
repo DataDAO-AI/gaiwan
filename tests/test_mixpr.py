@@ -3,7 +3,7 @@
 import pytest
 import numpy as np
 from scipy import sparse
-from gaiwan.mixpr import MixPR
+from gaiwan.mixpr import MixPR, MixPRConfig
 from gaiwan.models import CanonicalTweet, TweetMetadata
 from datetime import datetime, timezone
 
@@ -23,6 +23,22 @@ def sample_tweets():
             )
         )
     ]
+
+@pytest.fixture
+def mixpr_config():
+    """Create a MixPR configuration for testing."""
+    return MixPRConfig(
+        local_alpha=0.6,
+        similarity_threshold=0.2,
+        max_iterations=10,
+        min_df=1,
+        max_df=0.95,
+        batch_size=100,
+        graph_weight=0.3,
+        reply_weight=1.0,
+        quote_weight=0.8,
+        user_similarity_weight=0.4
+    )
 
 def test_mixpr_initialization(mixpr_config):
     """Test MixPR initialization with config."""
