@@ -12,6 +12,8 @@ dependencies = [
     "tqdm",
     "orjson",
     "genson",
+    "pyarrow",
+    "pandas"
 ]
 
 [project.optional-dependencies]
