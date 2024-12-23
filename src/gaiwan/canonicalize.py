@@ -13,7 +13,7 @@ import jsonschema
 from gaiwan.schema_generator import generate_schema
 from tqdm import tqdm
 import orjson
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -89,26 +89,34 @@ class TweetID:
 class CanonicalTweet:
     """Normalized tweet format."""
     id: TweetID
-    created_at: datetime
-    text: str
-    entities: dict
-    author_username: str
-    retweet_count: int = 0
+    text: str  # Required field, empty string is valid
+    _created_at: datetime
+    author_username: Optional[str] = None
+    retweet_count: Optional[int] = None
     in_reply_to_status_id: Optional[TweetID] = None
     in_reply_to_username: Optional[str] = None
     quoted_tweet_id: Optional[TweetID] = None
-    quoted_status_id_str: Optional[str] = None  # Raw quoted status ID string from archive
+    entities: Optional[dict] = None
     likers: Set[str] = field(default_factory=set)
+    reply_ids: Set[TweetID] = field(default_factory=set)
+
+    def __post_init__(self):
+        """Ensure created_at is set, deriving from ID if needed."""
+        if not self._created_at:
+            object.__setattr__(self, '_created_at', self.id.timestamp)
+
+    @property
+    def created_at(self) -> datetime:
+        """Get creation time."""
+        return self._created_at
 
     @classmethod
     def from_any_tweet(cls, data: Dict, username: str) -> Optional['CanonicalTweet']:
         """Create canonical tweet from any tweet type."""
         try:
             quoted_id = None  # Initialize at the top level
-            quoted_status_id_str = None  # Store raw string ID
             if 'tweet' in data:
                 data = data['tweet']
-                created_at = datetime.strptime(data['created_at'], "%a %b %d %H:%M:%S %z %Y")
                 text = data.get('full_text', data.get('text', ''))
                 tweet_id = TweetID.from_str(data['id_str'])
                 
@@ -128,7 +136,6 @@ class CanonicalTweet:
                                 # Only use if it's not a self-quote and is a valid ID
                                 if status_id != data['id_str'] and len(status_id) <= 20:
                                     quoted_id = TweetID.from_str(status_id)
-                                    quoted_status_id_str = status_id  # Store URL-derived ID as string
                                     break
                         except Exception as e:
                             logger.warning(f"Failed to extract quoted tweet ID from URL {expanded_url}: {e}")
@@ -140,16 +147,6 @@ class CanonicalTweet:
                         quoted_id = TweetID.from_any(quoted_status_id_str)
                     else:
                         logger.warning(f"Quote tweet {data['id_str']} missing quoted_status_id_str")
-
-                # Debug quote tweet handling
-                if is_quote and logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Tweet {data['id_str']} is a quote tweet:")
-                    logger.debug(f"  Raw tweet data: {json.dumps({
-                        'is_quote_status': data.get('is_quote_status'),
-                        'quoted_status_id_str': quoted_status_id_str,
-                        'quoted_status': bool(data.get('quoted_status')),
-                        'text': data.get('text', '')[:50] + '...'  # First 50 chars
-                    }, indent=2)}")
                 
                 # Convert entities with proper integer types
                 raw_entities = data.get('entities', {})
@@ -164,8 +161,8 @@ class CanonicalTweet:
                     'urls': [
                         {
                             'url': str(u['url']),
-                            'expanded_url': str(u.get('expanded_url', u['url'])),  # Fall back to short URL
-                            'display_url': str(u.get('display_url', u['url'])),    # Fall back to short URL
+                            'expanded_url': str(u.get('expanded_url', u['url'])),
+                            'display_url': str(u.get('display_url', u['url'])),
                             'indices': [int(idx) for idx in u['indices']]
                         }
                         for u in raw_entities.get('urls', [])
@@ -174,77 +171,9 @@ class CanonicalTweet:
                         {
                             'screen_name': str(m['screen_name']),
                             'indices': [int(idx) for idx in m['indices']],
-                            'id': int(m['id'])  # Convert to integer
+                            'id': int(m['id'])
                         }
                         for m in raw_entities.get('user_mentions', [])
-                    ],
-                    'media': [
-                        {
-                            'url': str(m['url']),
-                            'expanded_url': str(m['expanded_url']),
-                            'media_url': str(m['media_url']),
-                            'type': str(m['type']),
-                            'display_url': str(m['display_url']),
-                            'id': int(m['id']),  # Convert to integer
-                            'sizes': {
-                                size: {
-                                    'w': int(info['w']),  # Convert to integer
-                                    'h': int(info['h']),  # Convert to integer
-                                    'resize': str(info['resize'])
-                                }
-                                for size, info in m['sizes'].items()
-                            }
-                        }
-                        for m in raw_entities.get('media', [])
-                    ]
-                }
-                retweet_count = int(data.get('retweet_count', 0))
-                
-            elif 'noteTweet' in data:
-                data = data['noteTweet']
-                created_at = datetime.fromisoformat(data['createdAt'].replace('Z', '+00:00'))
-                if 'core' not in data or 'text' not in data['core']:
-                    return None
-                text = data['core']['text']
-                tweet_id = TweetID.from_str(str(data['noteTweetId']))
-                
-                # Check URLs for quote tweets in note tweets
-                quoted_id = None
-                quoted_status_id_str = None
-                for url in data['core'].get('urls', []):
-                    expanded_url = url.get('expandedUrl', url.get('shortUrl', ''))
-                    # Match twitter.com status URLs
-                    if 'twitter.com' in expanded_url and '/status/' in expanded_url:
-                        try:
-                            # Extract status ID from URL and take only numeric part
-                            status_part = expanded_url.split('/status/')[-1].split('/')[0]
-                            if match := re.match(r'(\d+)', status_part):
-                                status_id = match.group(1)
-                                # Only use if it's not a self-quote and is a valid ID
-                                if str(status_id) != str(data['noteTweetId']) and len(status_id) <= 20:
-                                    quoted_id = TweetID.from_str(status_id)
-                                    quoted_status_id_str = status_id  # Store URL-derived ID as string
-                                    break
-                        except Exception as e:
-                            logger.warning(f"Failed to extract quoted tweet ID from URL {expanded_url}: {e}")
-                
-                # Build entities from note data
-                entities = {
-                    'hashtags': [
-                        {
-                            'text': str(h['text']),
-                            'indices': [int(h['fromIndex']), int(h['toIndex'])]
-                        }
-                        for h in data['core'].get('hashtags', [])
-                    ],
-                    'urls': [
-                        {
-                            'url': str(u['shortUrl']),
-                            'expanded_url': str(u.get('expandedUrl', u['shortUrl'])),
-                            'display_url': str(u.get('displayUrl', u['shortUrl'])),
-                            'indices': [int(u['fromIndex']), int(u['toIndex'])]
-                        }
-                        for u in data['core'].get('urls', [])
                     ],
                     'media': [
                         {
@@ -263,66 +192,74 @@ class CanonicalTweet:
                                 for size, info in m['sizes'].items()
                             }
                         }
-                        for m in data.get('media', [])
+                        for m in raw_entities.get('media', [])
                     ]
                 }
-                retweet_count = 0
+                
+                return cls(
+                    id=tweet_id,
+                    text=text,
+                    _created_at=datetime.strptime(data['created_at'], "%a %b %d %H:%M:%S %z %Y"),
+                    author_username=username,
+                    retweet_count=int(data.get('retweet_count', 0)),
+                    in_reply_to_status_id=TweetID.from_any(data['in_reply_to_status_id_str']) if data.get('in_reply_to_status_id_str') else None,
+                    in_reply_to_username=data.get('in_reply_to_screen_name'),
+                    quoted_tweet_id=quoted_id,
+                    entities=entities
+                )
+                
+            elif 'noteTweet' in data:
+                data = data['noteTweet']
+                if 'core' not in data or 'text' not in data['core']:
+                    return None
+                text = data['core']['text']
+                tweet_id = TweetID.from_str(str(data['noteTweetId']))
+                
+                # Build entities from note data
+                entities = {
+                    'hashtags': [
+                        {
+                            'text': str(h['text']),
+                            'indices': [int(h['fromIndex']), int(h['toIndex'])]
+                        }
+                        for h in data['core'].get('hashtags', [])
+                    ],
+                    'urls': [
+                        {
+                            'url': str(u['shortUrl']),
+                            'expanded_url': str(u.get('expandedUrl', u['shortUrl'])),
+                            'display_url': str(u.get('displayUrl', u['shortUrl'])),
+                            'indices': [int(u['fromIndex']), int(u['toIndex'])]
+                        }
+                        for u in data['core'].get('urls', [])
+                    ]
+                }
+                
+                return cls(
+                    id=tweet_id,
+                    text=text,
+                    _created_at=datetime.fromisoformat(data['createdAt'].replace('Z', '+00:00')),
+                    author_username=username,
+                    entities=entities
+                )
                 
             else:
                 return None
                 
-            if not text:
-                return None
-                
-            return cls(
-                id=TweetID.from_any(tweet_id),
-                created_at=created_at,
-                text=str(text),
-                entities=entities,
-                author_username=str(username),
-                retweet_count=retweet_count,
-                in_reply_to_status_id=TweetID.from_any(data['in_reply_to_status_id_str']) if data.get('in_reply_to_status_id_str') else None,
-                in_reply_to_username=data.get('in_reply_to_screen_name'),
-                quoted_tweet_id=quoted_id,
-                quoted_status_id_str=quoted_status_id_str
-            )
-            
         except Exception as e:
             logger.error(f"Error converting tweet: {str(e)}", exc_info=True)
             return None
 
-@dataclass
-class OrphanedTweet:
-    """Information about tweets we only know through likes/replies."""
-    id: TweetID
-    text: Optional[str] = None
-    url: Optional[str] = None
-    likers: Set[str] = field(default_factory=set)
-    reply_ids: Set[TweetID] = field(default_factory=set)
-    
-    def to_dict(self) -> Dict:
-        return {
-            'tweet_id': self.id,
-            'text': self.text,
-            'url': self.url,
-            'likers': sorted(self.likers),
-            'reply_ids': sorted(self.reply_ids)
-        }
-
 def process_archive(path: Path) -> Dict:
-    """Process a single archive file, extracting tweets, likes and reply structure."""
+    """Process a single archive file, extracting tweets and profile."""
     with open(path, 'rb') as f:
         data = orjson.loads(f.read())
     
     username = path.stem[:-8] if path.stem.endswith('_archive') else path.stem
     
     result = {
-        'tweets': {},      
-        'likes': set(),    
-        'replies': set(),  
-        'profile': data.get('profile'),
-        'like_texts': {},  # Add these
-        'like_urls': {}    # Add these
+        'tweets': {},      # Just tweets and profile now
+        'profile': data.get('profile')
     }
     
     # Process tweets and build reply graph
@@ -332,29 +269,54 @@ def process_archive(path: Path) -> Dict:
             if tweet:
                 result['tweets'][tweet.id] = tweet
                 if tweet.in_reply_to_status_id:
-                    result['replies'].add((tweet.in_reply_to_status_id, tweet.id))
+                    # Add to reply_ids of parent tweet if it exists
+                    if tweet.in_reply_to_status_id in result['tweets']:
+                        result['tweets'][tweet.in_reply_to_status_id].reply_ids.add(tweet.id)
     
-    # Process likes in same pass
+    # Process likes, creating CanonicalTweets for liked tweets we don't have
     for like in data.get('like', []):
         if 'like' in like:
             like_data = like['like']
             if tweet_id := like_data.get('tweetId'):
-                tid = TweetID.from_str(tweet_id)  # Convert to TweetID
-                result['likes'].add((tid, username))
-                # Store text and URL if available
-                if text := like_data.get('fullText'):
-                    result['like_texts'][tid] = text
-                if url := like_data.get('expandedUrl'):
-                    result['like_urls'][tid] = url
+                tid = TweetID.from_str(tweet_id)
+                if tid not in result['tweets']:
+                    # Create tweet even if no text - it might have had media or be part of a thread
+                    text = like_data.get('fullText', '')  # Default to empty string
+                    result['tweets'][tid] = CanonicalTweet(
+                        id=tid,
+                        text=text,
+                        _created_at=tid.timestamp,  # Always derive from ID for likes
+                        entities={},  # Empty dict for now
+                        author_username=None,  # Unknown for now
+                        likers={username}  # Initialize with current liker
+                    )
+                else:
+                    # Add this user as a liker
+                    result['tweets'][tid].likers.add(username)
     
     return result
 
-def build_thread_trees(reply_graph: Dict[TweetID, Set[TweetID]]) -> Dict[TweetID, Set[TweetID]]:
-    """Build complete thread trees from reply graph.
-    Returns a mapping of root tweet ID -> set of all descendant tweet IDs."""
-    # Find root tweets (no parent)
-    all_replies = {reply for replies in reply_graph.values() for reply in replies}
-    roots = {tweet_id for tweet_id in reply_graph if tweet_id not in all_replies}
+def build_thread_trees(tweets: Dict[TweetID, CanonicalTweet]) -> Dict[TweetID, Set[TweetID]]:
+    """Build complete thread trees from tweets."""
+    # Build reply graph including both parent->child and child->parent relationships
+    reply_graph = {}
+    for tweet in tweets.values():
+        # Add this tweet's replies
+        if tweet.reply_ids:
+            reply_graph[tweet.id] = tweet.reply_ids
+        
+        # Add this tweet as a reply to its parent
+        if tweet.in_reply_to_status_id and tweet.in_reply_to_status_id in tweets:
+            if tweet.in_reply_to_status_id not in reply_graph:
+                reply_graph[tweet.in_reply_to_status_id] = set()
+            reply_graph[tweet.in_reply_to_status_id].add(tweet.id)
+    
+    # Find root tweets (have no parent)
+    roots = {
+        tweet.id 
+        for tweet in tweets.values() 
+        if not tweet.in_reply_to_status_id or tweet.in_reply_to_status_id not in tweets
+    }
     
     # Build complete trees
     thread_trees = {}
@@ -374,127 +336,104 @@ def build_thread_trees(reply_graph: Dict[TweetID, Set[TweetID]]) -> Dict[TweetID
     
     return thread_trees
 
-def write_parquet_output(base_path: Path, data: Dict, name: str = 'archive'):
-    """Write output in Parquet format with optimized compression."""
+def write_parquet_output(output_dir: Path, data: Dict, name: str, batch_size: int = 100_000):
+    """Write data to Parquet files in batches."""
     logger.info("Converting data for Parquet format...")
     
-    # Ensure output directories exist
-    output_dir = base_path / 'output'
-    for subdir in ['tweets', 'profiles', 'trees', 'orphaned', 'schemas']:
-        (output_dir / subdir).mkdir(parents=True, exist_ok=True)
-    
-    # Define schema with explicit int64 types for IDs
+    # Define schemas
     tweets_schema = pa.schema([
         pa.field('id', pa.int64(), nullable=False),  # ID is never null
-        pa.field('created_at', pa.string()),
-        pa.field('text', pa.string()),
-        pa.field('author_username', pa.string()),
-        pa.field('retweet_count', pa.int32()),
+        pa.field('text', pa.string(), nullable=False),  # Text is never null
+        pa.field('created_at', pa.string(), nullable=False),  # Always available from ID
+        pa.field('author_username', pa.string(), nullable=True),  # Optional
+        pa.field('retweet_count', pa.int32(), nullable=True),  # Optional
         pa.field('in_reply_to_status_id', pa.int64(), nullable=True),
         pa.field('in_reply_to_username', pa.string(), nullable=True),
         pa.field('quoted_tweet_id', pa.int64(), nullable=True),
-        pa.field('quoted_status_id_str', pa.string(), nullable=True),
-        pa.field('entities', pa.string()),
-        pa.field('likers', pa.list_(pa.string())),
-        pa.field('reply_ids', pa.list_(pa.int64()))
-    ])
-    
-    orphaned_schema = pa.schema([
-        pa.field('tweet_id', pa.int64(), nullable=False),  # ID is never null
-        pa.field('text', pa.string(), nullable=True),
-        pa.field('url', pa.string(), nullable=True),
+        pa.field('entities', pa.string(), nullable=True),  # Optional
         pa.field('likers', pa.list_(pa.string())),
         pa.field('reply_ids', pa.list_(pa.int64()))
     ])
     
     thread_schema = pa.schema([
-        pa.field('root_id', pa.int64(), nullable=False),  # ID is never null
-        pa.field('descendant_ids', pa.list_(pa.int64()))
+        pa.field('root_id', pa.int64(), nullable=False),  # Root tweet ID
+        pa.field('descendant_ids', pa.list_(pa.int64())),  # All tweets in thread below root
+        pa.field('quoted_ids', pa.list_(pa.int64())),  # Tweets quoted by this thread
+        pa.field('quoting_ids', pa.list_(pa.int64()))  # Tweets that quote this thread
     ])
     
-    # Convert data to lists first, ensuring proper null handling
-    tweets_data = [
-        {
-            'id': tweet.id._id,  # _id property ensures int64
-            'created_at': tweet.created_at.isoformat(),
+    # Process tweets in batches
+    tweets_data = []
+    batch_num = 0
+    for i, tweet in enumerate(data['tweets'].values()):
+        tweets_data.append({
+            'id': tweet.id._id,
             'text': tweet.text,
+            'created_at': tweet.created_at.isoformat(),
             'author_username': tweet.author_username,
             'retweet_count': tweet.retweet_count,
             'in_reply_to_status_id': tweet.in_reply_to_status_id._id if tweet.in_reply_to_status_id else None,
-            'in_reply_to_username': tweet.in_reply_to_username or None,
+            'in_reply_to_username': tweet.in_reply_to_username,
             'quoted_tweet_id': tweet.quoted_tweet_id._id if tweet.quoted_tweet_id else None,
-            'quoted_status_id_str': tweet.quoted_status_id_str or None,  # Ensure None instead of empty string
-            'entities': orjson.dumps(tweet.entities).decode('utf-8'),
-            'likers': sorted(list(data['likes'].get(tweet.id, set()))) or [],  # Empty list instead of None
-            'reply_ids': [rid._id for rid in sorted(data['reply_graph'].get(tweet.id, set()))] or []  # _id property ensures int64
+            'entities': orjson.dumps(tweet.entities).decode('utf-8') if tweet.entities else None,
+            'likers': sorted(list(tweet.likers)) or [],
+            'reply_ids': [rid._id for rid in sorted(tweet.reply_ids)] or []
+        })
+        
+        if len(tweets_data) >= batch_size:
+            logger.info(f"Writing batch {batch_num} ({len(tweets_data):,} tweets)...")
+            tweets_table = pa.Table.from_pylist(tweets_data, schema=tweets_schema)
+            pq.write_table(
+                tweets_table,
+                output_dir / 'tweets' / f'{name}.{batch_num}.parquet',
+                compression='ZSTD',
+                compression_level=9
+            )
+            tweets_data = []
+            batch_num += 1
+    
+    # Write final batch if any
+    if tweets_data:
+        logger.info(f"Writing final batch ({len(tweets_data):,} tweets)...")
+        tweets_table = pa.Table.from_pylist(tweets_data, schema=tweets_schema)
+        pq.write_table(
+            tweets_table,
+            output_dir / 'tweets' / f'{name}.{batch_num}.parquet',
+            compression='ZSTD',
+            compression_level=9
+        )
+    
+    # Build thread trees while we have the tweets in memory
+    logger.info("Building thread trees...")
+    thread_trees = build_thread_trees(data['tweets'])
+    
+    # Write thread trees
+    logger.info(f"Writing {len(thread_trees):,} thread trees...")
+    thread_data = []
+    for root, descendants in thread_trees.items():
+        # Get all tweets in thread
+        thread_tweets = {root} | descendants
+        
+        # Find quoted tweets (tweets quoted by any tweet in thread)
+        quoted_ids = {
+            tweet.quoted_tweet_id._id
+            for tweet in (data['tweets'][tid] for tid in thread_tweets)
+            if tweet.quoted_tweet_id
         }
-        for tweet in data['tweets'].values()
-    ]
-    
-    # Convert orphaned tweets with proper null handling
-    orphaned_data = [
-        {
-            'tweet_id': tweet.id._id,  # _id property ensures int64
-            'text': tweet.text or None,  # Ensure None instead of empty string
-            'url': tweet.url or None,    # Ensure None instead of empty string
-            'likers': list(tweet.likers) or [],  # Empty list instead of None
-            'reply_ids': [rid._id for rid in sorted(tweet.reply_ids)] or []  # _id property ensures int64
+        
+        # Find quoting tweets (tweets that quote any tweet in thread)
+        quoting_ids = {
+            tid._id
+            for tid, tweet in data['tweets'].items()
+            if tweet.quoted_tweet_id and tweet.quoted_tweet_id in thread_tweets
         }
-        for tweet in data['orphaned'].values()
-    ]
-    
-    # Convert profiles with proper null handling
-    profile_data = [
-        {
-            'username': username,
-            'bio': profile[0]['profile']['description']['bio'] or None,
-            'website': profile[0]['profile']['description']['website'] or None,
-            'location': profile[0]['profile']['description']['location'] or None,
-            'avatar_url': profile[0]['profile']['avatarMediaUrl'] or None,
-            'header_url': profile[0]['profile'].get('headerMediaUrl', '') or None
-        }
-        for username, profile in data['profiles'].items()
-    ]
-    
-    # Build thread trees with proper null handling
-    thread_data = [
-        {
-            'root_id': root_id._id,  # _id property ensures int64
-            'descendant_ids': [d._id for d in sorted(descendants)] or []  # _id property ensures int64
-        }
-        for root_id, descendants in build_thread_trees(data['reply_graph']).items()
-    ]
-    
-    # Write main tables with explicit schemas
-    logger.info(f"Writing {len(tweets_data):,} tweets...")
-    tweets_table = pa.Table.from_pylist(tweets_data, schema=tweets_schema)
-    pq.write_table(
-        tweets_table, 
-        output_dir / 'tweets' / f'{name}.parquet',
-        compression='ZSTD',
-        compression_level=9
-    )
-    
-    logger.info(f"Writing {len(orphaned_data):,} orphaned tweets...")
-    orphaned_table = pa.Table.from_pylist(orphaned_data, schema=orphaned_schema)
-    pq.write_table(
-        orphaned_table,
-        output_dir / 'orphaned' / f'{name}.parquet',
-        compression='ZSTD',
-        compression_level=9
-    )
-    
-    logger.info(f"Writing {len(profile_data):,} profiles...")
-    profiles_table = pa.Table.from_pylist(profile_data)
-    pq.write_table(
-        profiles_table,
-        output_dir / 'profiles' / f'{name}.parquet',
-        compression='ZSTD',
-        compression_level=9
-    )
-    
-    # Write thread lookup table
-    logger.info(f"Writing {len(thread_data):,} thread trees...")
+        
+        thread_data.append({
+            'root_id': root._id,
+            'descendant_ids': [tid._id for tid in sorted(descendants)],
+            'quoted_ids': sorted(quoted_ids),
+            'quoting_ids': sorted(quoting_ids)
+        })
     thread_table = pa.Table.from_pylist(thread_data, schema=thread_schema)
     pq.write_table(
         thread_table,
@@ -504,17 +443,13 @@ def write_parquet_output(base_path: Path, data: Dict, name: str = 'archive'):
     )
 
 def ensure_output_structure(base_dir: Path, name: str) -> Dict[str, Path]:
-    """Create and return output directory structure.
-    
-    Returns:
-        Dict mapping purpose to Path, e.g., 'tweets' -> Path('output/tweets')
-    """
+    """Create and return output directory structure."""
     # Ensure base directory exists
     base_dir.mkdir(parents=True, exist_ok=True)
     
     # Create standard subdirectories
     paths = {}
-    for subdir in ['tweets', 'profiles', 'trees', 'orphaned', 'schemas']:
+    for subdir in ['tweets', 'profiles', 'trees', 'schemas']:  # Added schemas
         dir_path = base_dir / subdir
         dir_path.mkdir(parents=True, exist_ok=True)
         paths[subdir] = dir_path
@@ -531,60 +466,37 @@ def canonicalize_archive(archive_dir: Path, output_dir: Path, schema_file: Optio
     
     # Main data structures
     tweets: Dict[TweetID, CanonicalTweet] = {}
-    likes: Dict[TweetID, Set[str]] = {}
-    reply_graph: Dict[TweetID, Set[TweetID]] = {}
-    orphaned: Dict[TweetID, OrphanedTweet] = {}
     profiles: Dict[str, Dict] = {}
     
     # Process archives in parallel
     archives = list(archive_dir.glob("*_archive.json"))
     if sample_size:
-        import random
         archives = random.sample(archives, min(sample_size, len(archives)))
-        logger.info(f"Using sample of {len(archives)} archives")
     logger.info(f"Processing {len(archives)} archives...")
     
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(process_archive, path): path for path in archives}
         
         for future in tqdm(as_completed(futures), total=len(futures), desc="Processing archives"):
-            path = futures[future]  # Get path before trying result
+            path = futures[future]
             try:
                 result = future.result()
                 username = path.stem[:-8] if path.stem.endswith('_archive') else path.stem
                 
-                # Merge tweets
-                tweets.update(result['tweets'])
-                
-                # Merge likes and track orphaned tweets
-                for tweet_id, liker in result['likes']:
-                    # Add to likes index
-                    if tweet_id not in likes:
-                        likes[tweet_id] = set()
-                    likes[tweet_id].add(liker)
-                    
-                    # Track orphaned tweets
-                    if tweet_id not in tweets:
-                        if tweet_id not in orphaned:
-                            orphaned[tweet_id] = OrphanedTweet(
-                                id=TweetID.from_any(tweet_id),
-                                text=result['like_texts'].get(tweet_id),
-                                url=result['like_urls'].get(tweet_id)
-                            )
-                        orphaned[tweet_id].likers.add(liker)
-                
-                # Merge reply structure and track orphaned tweets
-                for parent_id, reply_id in result['replies']:
-                    # Add to reply graph
-                    if parent_id not in reply_graph:
-                        reply_graph[parent_id] = set()
-                    reply_graph[parent_id].add(reply_id)
-                    
-                    # Track orphaned tweets
-                    if parent_id not in tweets and parent_id not in orphaned:
-                        orphaned[parent_id] = OrphanedTweet(id=parent_id)
-                    if parent_id in orphaned:
-                        orphaned[parent_id].reply_ids.add(reply_id)
+                # Merge tweets and update reply structure
+                for tweet in result['tweets'].values():
+                    if tweet.id not in tweets:
+                        tweets[tweet.id] = tweet
+                    else:
+                        # Update existing tweet with any new information
+                        existing = tweets[tweet.id]
+                        existing.likers.update(tweet.likers)
+                        if tweet.author_username and not existing.author_username:
+                            existing.author_username = tweet.author_username
+                        if tweet.entities and not existing.entities:
+                            existing.entities = tweet.entities
+                        # Merge reply_ids
+                        existing.reply_ids.update(tweet.reply_ids)
                 
                 # Store profile
                 if result['profile']:
@@ -593,13 +505,18 @@ def canonicalize_archive(archive_dir: Path, output_dir: Path, schema_file: Optio
             except Exception as e:
                 logger.error(f"Error processing archive {path}: {e}")
     
+    # Try to derive author usernames from replies where possible
+    for tweet in tweets.values():
+        if tweet.in_reply_to_status_id and tweet.in_reply_to_username:
+            if tweet.in_reply_to_status_id in tweets:
+                parent = tweets[tweet.in_reply_to_status_id]
+                if not parent.author_username:
+                    parent.author_username = tweet.in_reply_to_username
+    
     if format == 'parquet':
         write_parquet_output(output_dir, {
             'tweets': tweets,
-            'orphaned': orphaned,
-            'profiles': profiles,
-            'likes': likes,
-            'reply_graph': reply_graph
+            'profiles': profiles
         }, name=name)
     else:
         # Write JSON to output directory
@@ -607,25 +524,19 @@ def canonicalize_archive(archive_dir: Path, output_dir: Path, schema_file: Optio
         output = {
             "tweets": [
                 {
-                    **asdict(tweet),
                     'id': tweet.id._id,  # Integer
+                    'text': tweet.text,
+                    'created_at': tweet.created_at.isoformat(),
+                    'author_username': tweet.author_username,
+                    'retweet_count': tweet.retweet_count,
                     'in_reply_to_status_id': tweet.in_reply_to_status_id._id if tweet.in_reply_to_status_id else None,
+                    'in_reply_to_username': tweet.in_reply_to_username,
                     'quoted_tweet_id': tweet.quoted_tweet_id._id if tweet.quoted_tweet_id else None,
-                    'quoted_status_id_str': tweet.quoted_status_id_str,  # Add raw string ID
-                    'likers': sorted(likes.get(tweet.id, set())),
-                    'reply_ids': [rid._id for rid in sorted(reply_graph.get(tweet.id, set()))]  # Array of integers
+                    'entities': orjson.dumps(tweet.entities).decode('utf-8') if tweet.entities else None,
+                    'likers': sorted(tweet.likers),
+                    'reply_ids': [rid._id for rid in sorted(tweet.reply_ids)]
                 }
                 for tweet in sorted(tweets.values(), key=lambda t: t.created_at, reverse=True)
-            ],
-            "orphaned_tweets": [
-                {
-                    'tweet_id': orphan.id._id,  # Integer
-                    'text': orphan.text,
-                    'url': orphan.url,
-                    'likers': sorted(orphan.likers),
-                    'reply_ids': [rid._id for rid in sorted(orphan.reply_ids)]  # Array of integers
-                }
-                for orphan in sorted(orphaned.values(), key=lambda o: len(o.likers), reverse=True)
             ],
             "profiles": [
                 {
@@ -653,19 +564,15 @@ def canonicalize_archive(archive_dir: Path, output_dir: Path, schema_file: Optio
             # Generate schema from all Parquet files
             parquet_files = [
                 paths[subdir] / f'{name}.parquet'
-                for subdir in ['tweets', 'orphaned', 'profiles', 'trees']
+                for subdir in ['tweets', 'profiles', 'trees']
             ]
             generate_schema(parquet_files, schema_file)
     
     # Print statistics
     logger.info("\nFinal statistics:")
     logger.info(f"  Tweets: {len(tweets):,}")
-    logger.info(f"  Orphaned tweets: {len(orphaned):,}")
-    logger.info(f"  Total likes: {sum(len(l) for l in likes.values()):,}")
-    logger.info(f"  Reply connections: {sum(len(r) for r in reply_graph.values()):,}")
-    logger.info(f"  Quote tweets: {sum(1 for t in tweets.values() if t.quoted_tweet_id is not None):,}")
     logger.info(f"  Profiles: {len(profiles):,}")
-    logger.info(f"  Thread trees: {len(build_thread_trees(reply_graph)):,}")
+    logger.info(f"  Thread trees: {len(build_thread_trees(tweets)):,}")
 
 def main():
     """CLI entry point."""
@@ -681,10 +588,6 @@ def main():
                        help="Output in JSON format instead of Parquet")
     parser.add_argument('--sample', type=int, metavar='N',
                        help="Process only N random archives (for testing)")
-    parser.add_argument('--analyze', action='store_true',
-                       help="Run thread analysis after processing")
-    parser.add_argument('--inspect', action='store_true',
-                       help="Inspect raw archive contents for debugging")
     args = parser.parse_args()
     
     logging.basicConfig(
@@ -701,46 +604,6 @@ def main():
                         sample_size=args.sample,
                         name=args.name)
     
-    # Run analysis if requested
-    if args.analyze:
-        from gaiwan.analyze import analyze_thread_patterns, analyze_reconstruction_confidence
-        logger.info("\nAnalyzing thread patterns...")
-        
-        threads = analyze_thread_patterns(
-            paths['tweets'] / f'{args.name}.parquet',
-            paths['orphaned'] / f'{args.name}.parquet'
-        )
-        patterns = analyze_reconstruction_confidence(threads)
-        
-        # Show findings
-        logger.info(f"Found {len(patterns)} reconstructible tweets")
-        high_conf = sum(1 for p in patterns.values() 
-                       if sum(p.confidence_factors.values())/len(p.confidence_factors) > 0.8)
-        logger.info(f"High confidence reconstructions: {high_conf}")
-    
-    if args.inspect:
-        archives = list(args.archive_dir.glob("*_archive.json"))
-        if args.sample:
-            archives = random.sample(archives, min(args.sample, len(archives)))
-        for path in archives:
-            inspect_archive(path)
-        return
-
-def inspect_archive(path: Path):
-    """Debug helper to examine raw archive contents."""
-    with open(path, 'rb') as f:
-        data = orjson.loads(f.read())
-    
-    quote_count = 0
-    total_tweets = 0
-    for section in ['tweets', 'community-tweet', 'note-tweet']:
-        for tweet_data in data.get(section, []):
-            total_tweets += 1
-            tweet = CanonicalTweet.from_any_tweet(tweet_data, path.stem)
-            if tweet and tweet.quoted_status_id_str:
-                quote_count += 1
-    
-    logger.info(f"Archive {path.name}: {total_tweets} tweets, {quote_count} quotes")
 
 if __name__ == '__main__':
     main() 
