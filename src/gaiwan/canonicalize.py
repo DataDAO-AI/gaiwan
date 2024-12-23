@@ -134,7 +134,7 @@ class CanonicalTweet:
                             if match := re.match(r'(\d+)', status_part):
                                 status_id = match.group(1)
                                 # Only use if it's not a self-quote and is a valid ID
-                                if status_id != data['id_str'] and len(status_id) <= 20:
+                                if status_id != data['id_str'] and len(status_id) <= 19:
                                     quoted_id = TweetID.from_str(status_id)
                                     break
                         except Exception as e:
