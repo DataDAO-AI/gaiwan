@@ -1,39 +1,92 @@
-"""Generate JSON Schema from Twitter archive analysis."""
+"""Generate JSON schema from example files."""
 
 import json
 import logging
-import argparse
 from pathlib import Path
+from typing import List
 from genson import SchemaBuilder
+import pyarrow.parquet as pq
+import jsonschema
 
 logger = logging.getLogger(__name__)
 
-def generate_schema(archive_dir: Path, output_file: Path):
-    """Generate JSON schema from archive files."""
+CANONICAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tweets": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "created_at": {"type": "string", "format": "date-time"},
+                    "text": {"type": "string"},
+                    "author_username": {"type": "string"},
+                    "retweet_count": {"type": "integer"},
+                    "in_reply_to_status_id": {"type": ["string", "null"]},
+                    "in_reply_to_username": {"type": ["string", "null"]},
+                    "quoted_tweet_id": {"type": ["string", "null"]},
+                    "likers": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["id", "created_at", "text", "author_username"]
+            }
+        },
+        "profiles": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "username": {"type": "string"},
+                    "bio": {"type": "string"},
+                    "website": {"type": "string"},
+                    "location": {"type": "string"},
+                    "avatar_url": {"type": "string"},
+                    "header_url": {"type": ["string", "null"]}
+                },
+                "required": ["username", "bio", "website", "location", "avatar_url"]
+            }
+        }
+    },
+    "required": ["tweets", "profiles"]
+}
+
+def validate_schema(data: dict) -> bool:
+    """Validate data against canonical schema."""
+    try:
+        jsonschema.validate(data, CANONICAL_SCHEMA)
+        return True
+    except jsonschema.exceptions.ValidationError as e:
+        logger.error(f"Schema validation failed: {e}")
+        return False
+
+def generate_schema(files: List[Path], output_file: Path):
+    """Generate schema from Parquet or JSON files."""
+    logger.info(f"Generating schema from {len(files)} files:")
+    
     builder = SchemaBuilder()
-    
-    # Process each archive to build schema
-    archives = list(archive_dir.glob("*_archive.json"))
-    logger.info(f"Generating schema from {len(archives)} archives:")
-    
-    for archive_path in archives:
-        try:
-            logger.info(f"  Processing {archive_path.name}")
-            with open(archive_path) as f:
+    for file in files:
+        logger.info(f"  Processing {file}")
+        
+        # Load data based on file type
+        if file.suffix == '.json':
+            with open(file) as f:
                 data = json.load(f)
-                builder.add_object(data)
-                
-        except Exception as e:
-            logger.error(f"Error processing {archive_path}: {str(e)}")
+        elif file.suffix == '.parquet':
+            table = pq.read_table(file)
+            data = table.to_pylist()
+        else:
+            logger.warning(f"Skipping unknown file type: {file}")
             continue
+            
+        builder.add_object(data)
     
     # Write schema
-    schema = builder.to_schema()
     logger.info(f"Writing schema to {output_file}")
-    
-    output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, 'w') as f:
-        json.dump(schema, f, indent=2)
+        json.dump(builder.to_schema(), f, indent=2)
 
 def main():
     """CLI entry point."""

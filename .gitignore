@@ -39,3 +39,4 @@ wheels/
 !gaiwan/
 !gaiwan/__init__.py
 !gaiwan/mixpr.py
+output/
