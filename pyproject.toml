@@ -1,18 +1,27 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "gaiwan"
 version = "0.1.0"
-description = "Twitter archive analysis tools"
+description = "Twitter archive tools"
 requires-python = ">=3.7"
 dependencies = [
-    "orjson",
-    "numpy",
-    "scipy",
-    "scikit-learn",
     "requests",
+    "tqdm",
+    "orjson",
+    "genson",
+    "pyarrow",
+    "pandas"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-timeout",
+    "flake8",
 ]
 
 [tool.pylint.messages_control]
@@ -37,3 +46,9 @@ addopts = "-v --cov=gaiwan --cov-report=term-missing"
 [tool.coverage.run]
 source = ["gaiwan"]
 omit = ["tests/*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: mark test as slow running",
+    "timeout: mark test to timeout after X seconds"
+]
