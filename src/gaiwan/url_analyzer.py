@@ -234,9 +234,14 @@ class URLAnalyzer:
                     elif 'url' in url_entity:
                         short_url = url_entity['url']
                         if self.should_resolve_url(short_url):
+                            logger.debug(f"Attempting to resolve shortened URL: {short_url}")
                             resolved = self.resolve_url(short_url)
                             if resolved:
+                                logger.debug(f"Successfully resolved {short_url} -> {resolved}")
                                 urls.add(resolved)
+                            else:
+                                logger.debug(f"Failed to resolve shortened URL: {short_url}")
+                                urls.add(short_url)  # Keep the original shortened URL
                         else:
                             urls.add(short_url)
 
@@ -265,18 +270,21 @@ class URLAnalyzer:
                         urls = self.extract_urls_from_tweet(tweet)
                         for url in urls:
                             parsed = urlparse(url)
+                            raw_domain = parsed.netloc
+                            # If it's a shortened URL that failed to resolve, mark as unresolved
+                            is_resolved = not (raw_domain in self.shortener_domains)
                             url_data.append({
                                 'username': username,
                                 'tweet_id': tweet_id,
                                 'tweet_created_at': created_at,
                                 'url': url,
                                 'domain': self.normalize_domain(parsed.netloc),
-                                'raw_domain': parsed.netloc,
+                                'raw_domain': raw_domain,
                                 'protocol': parsed.scheme,
                                 'path': parsed.path,
                                 'query': parsed.query,
                                 'fragment': parsed.fragment,
-                                'is_resolved': not url.startswith('https://t.co/')
+                                'is_resolved': is_resolved
                             })
             
             return pd.DataFrame(url_data)
@@ -342,6 +350,13 @@ def main():
         datefmt='%H:%M:%S'
     )
 
+    # Add a file handler for debug logging regardless of console level
+    if not args.debug:
+        debug_handler = logging.FileHandler('url_resolution.log')
+        debug_handler.setLevel(logging.DEBUG)
+        debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(debug_handler)
+
     output_file = args.output or Path('urls.parquet')
     existing_df = None
     processed_archives = set()
@@ -367,21 +382,27 @@ def main():
         ]
         if not new_archives:
             logger.info("No new archives to process")
+            df = existing_df
+        else:
+            logger.info(f"Found {len(new_archives)} new archives to process")
+            archives = new_archives
+            # Analyze new archives
+            df = analyzer.analyze_archives()
+            
+            if df.empty:
+                logger.error("No data found in new archives")
+                return
+
+            # Merge with existing data
+            df = pd.concat([existing_df, df], ignore_index=True)
+            logger.info(f"Merged new data. Total URLs: {len(df)}")
+    else:
+        # Analyze all archives
+        df = analyzer.analyze_archives()
+        
+        if df.empty:
+            logger.error("No data found in archives")
             return
-        logger.info(f"Found {len(new_archives)} new archives to process")
-        archives = new_archives
-
-    # Analyze new archives
-    df = analyzer.analyze_archives()
-    
-    if df.empty:
-        logger.error("No data found in new archives")
-        return
-
-    # Merge with existing data if available
-    if existing_df is not None and not args.force:
-        df = pd.concat([existing_df, df], ignore_index=True)
-        logger.info(f"Merged new data. Total URLs: {len(df)}")
 
     # Print summary statistics
     print("\nOverall Statistics:")
@@ -390,21 +411,22 @@ def main():
     print(f"Unique URLs: {df['url'].nunique()}")
     
     # Create masks for different categories
-    deprecated_mask = df['domain'].isin(['t.co', 'bit.ly', 'buff.ly', 'tinyurl.com', 'ow.ly', 'goo.gl', 'tiny.cc', 'is.gd'])
+    unresolved_mask = (~df['is_resolved']) & (df['raw_domain'].isin(analyzer.shortener_domains))
     twitter_internal_mask = df['url'].str.contains(r'https?://(?:(?:www\.|m\.)?twitter\.com|x\.com)/\w+/status/', na=False)
     
     # Separate dataframes
-    deprecated_df = df[deprecated_mask]
-    twitter_internal_df = df[twitter_internal_mask & ~deprecated_mask]  # Exclude any that are also deprecated
-    active_df = df[~deprecated_mask & ~twitter_internal_mask]
+    unresolved_df = df[unresolved_mask]
+    twitter_internal_df = df[twitter_internal_mask & ~unresolved_mask]  # Exclude any that are unresolved
+    active_df = df[~unresolved_mask & ~twitter_internal_mask]
     
-    print("\nDeprecated Link Statistics:")
-    if not deprecated_df.empty:
-        print(f"Total deprecated links: {len(deprecated_df)}")
-        print("\nDeprecated domains breakdown:")
-        print(deprecated_df['domain'].value_counts())
+    print("\nUnresolved Shortened URLs:")
+    if not unresolved_df.empty:
+        print(f"Total unresolved shortened URLs: {len(unresolved_df)}")
+        print("\nUnresolved domains breakdown:")
+        print(unresolved_df['raw_domain'].value_counts())
+        print("\nNote: These are shortened URLs that could not be resolved. Check url_resolution.log for details.")
     else:
-        print("No deprecated links found")
+        print("No unresolved shortened URLs found")
     
     print("\nTwitter Internal Link Statistics:")
     if not twitter_internal_df.empty:
