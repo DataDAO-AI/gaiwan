@@ -123,12 +123,18 @@ class URLAnalyzer:
 
         # Add domain normalization rules
         self.domain_groups = {
-            'twitter.com': ['twitter.com', 'x.com', 'www.twitter.com'],
-            'youtube.com': ['youtube.com', 'www.youtube.com', 'youtu.be'],
-            'wikipedia.org': ['wikipedia.org', 'en.wikipedia.org', 'fr.wikipedia.org', 'de.wikipedia.org'],
+            'twitter.com': ['twitter.com', 'x.com', 'www.twitter.com', 'm.twitter.com'],
+            'youtube.com': ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com'],
+            'wikipedia.org': [
+                'wikipedia.org', 
+                'en.wikipedia.org', 'fr.wikipedia.org', 'de.wikipedia.org',
+                'en.m.wikipedia.org', 'fr.m.wikipedia.org', 'de.m.wikipedia.org',
+                'm.wikipedia.org'
+            ],
             'substack.com': lambda domain: domain.endswith('.substack.com'),
             'medium.com': lambda domain: domain.endswith('.medium.com'),
-            'github.com': ['github.com', 'raw.githubusercontent.com', 'gist.github.com'],
+            'github.com': ['github.com', 'raw.githubusercontent.com', 'gist.github.com', 'm.github.com'],
+            'deprecated_links': lambda domain: domain in self.shortener_domains,
         }
 
         # Add known URL shorteners
@@ -160,6 +166,15 @@ class URLAnalyzer:
         """Normalize domain names to group related sites."""
         # Remove www. prefix for consistency
         domain = domain.lower().replace('www.', '')
+        
+        # Handle mobile domains by removing 'm.' prefix if it exists
+        parts = domain.split('.')
+        if 'm' in parts:
+            m_index = parts.index('m')
+            # Only remove if it's a subdomain (not the main domain)
+            if m_index < len(parts) - 2:
+                parts.pop(m_index)
+                domain = '.'.join(parts)
         
         # Check each domain group
         for main_domain, matchers in self.domain_groups.items():
@@ -374,8 +389,36 @@ def main():
     print(f"Total URLs found: {len(df)}")
     print(f"Unique URLs: {df['url'].nunique()}")
     
-    print("\nTop 20 domains:")
-    print(df['domain'].value_counts().head(20))
+    # Create masks for different categories
+    deprecated_mask = df['domain'].isin(['t.co', 'bit.ly', 'buff.ly', 'tinyurl.com', 'ow.ly', 'goo.gl', 'tiny.cc', 'is.gd'])
+    twitter_internal_mask = df['url'].str.contains(r'https?://(?:(?:www\.|m\.)?twitter\.com|x\.com)/\w+/status/', na=False)
+    
+    # Separate dataframes
+    deprecated_df = df[deprecated_mask]
+    twitter_internal_df = df[twitter_internal_mask & ~deprecated_mask]  # Exclude any that are also deprecated
+    active_df = df[~deprecated_mask & ~twitter_internal_mask]
+    
+    print("\nDeprecated Link Statistics:")
+    if not deprecated_df.empty:
+        print(f"Total deprecated links: {len(deprecated_df)}")
+        print("\nDeprecated domains breakdown:")
+        print(deprecated_df['domain'].value_counts())
+    else:
+        print("No deprecated links found")
+    
+    print("\nTwitter Internal Link Statistics:")
+    if not twitter_internal_df.empty:
+        print(f"Total internal Twitter links: {len(twitter_internal_df)}")
+        print(f"Unique Twitter conversations referenced: {twitter_internal_df['url'].nunique()}")
+    else:
+        print("No internal Twitter links found")
+    
+    print("\nTop 20 External Domains:")
+    domain_counts = active_df['domain'].value_counts()
+    if not domain_counts.empty:
+        print(domain_counts.head(20))
+    else:
+        print("No external domains found")
     
     print("\nProtocols used:")
     print(df['protocol'].value_counts())
