@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 from urllib.parse import urlparse
 from collections import Counter
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Any
 import orjson
 from tqdm import tqdm
 import logging
@@ -37,7 +37,7 @@ Usage:
         python -m gaiwan.url_analyzer archives --debug
 
 Features:
-    - Resolves shortened URLs (t.co, bit.ly, buff.ly, etc.)
+    - Resolves shortened URLs (t.co, bit.ly, etc.)
     - Normalizes domains (e.g., youtu.be -> youtube.com)
     - Incremental processing (only analyzes new archives)
     - Creates backups of existing analysis
@@ -73,6 +73,56 @@ Example pandas queries:
     # URLs over time
     df.set_index('tweet_created_at')['domain'].resample('M').count()
 """
+
+class PageMetadata:
+    """Container for webpage metadata and fetch status."""
+    
+    def __init__(self, url: str):
+        self.url = url
+        self.title: Optional[str] = None
+        self.fetch_status: str = 'not_attempted'  # not_attempted, success, failed, skipped
+        self.fetch_error: Optional[str] = None
+        self.content_type: Optional[str] = None
+        self.last_fetch_time: Optional[datetime] = None
+        
+        # Extensible metadata fields (can be expanded later)
+        self.metadata: Dict[str, Any] = {
+            'description': None,  # For future meta description
+            'keywords': None,     # For future meta keywords
+            'og_title': None,     # For future OpenGraph title
+            'og_description': None,  # For future OpenGraph description
+            # Add more metadata fields as needed
+        }
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metadata to dictionary for DataFrame storage."""
+        return {
+            'title': self.title,
+            'fetch_status': self.fetch_status,
+            'fetch_error': self.fetch_error,
+            'content_type': self.content_type,
+            'last_fetch_time': self.last_fetch_time,
+            **self.metadata
+        }
+
+    def mark_skipped(self, reason: str) -> None:
+        """Mark URL as skipped with a reason."""
+        self.fetch_status = 'skipped'
+        self.fetch_error = reason
+        self.last_fetch_time = datetime.now(timezone.utc)
+
+    def mark_failed(self, error: str) -> None:
+        """Mark URL as failed with error details."""
+        self.fetch_status = 'failed'
+        self.fetch_error = error
+        self.last_fetch_time = datetime.now(timezone.utc)
+
+    def mark_success(self, content_type: str) -> None:
+        """Mark URL as successfully processed."""
+        self.fetch_status = 'success'
+        self.content_type = content_type
+        self.fetch_error = None
+        self.last_fetch_time = datetime.now(timezone.utc)
 
 class URLAnalyzer:
     """Analyzes URLs in Twitter archive data.
@@ -159,8 +209,19 @@ class URLAnalyzer:
         self.session.mount('http://', HTTPAdapter(max_retries=retries))
         self.session.mount('https://', HTTPAdapter(max_retries=retries))
         
-        # Cache for resolved URLs
+        # Cache for resolved URLs and metadata
         self._url_cache: Dict[str, Optional[str]] = {}
+        self._metadata_cache: Dict[str, 'PageMetadata'] = {}
+        
+        # Set a reasonable timeout for requests
+        self.timeout = 10
+        
+        # Add common headers to appear more like a browser
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        })
 
     def normalize_domain(self, domain: str) -> str:
         """Normalize domain names to group related sites."""
@@ -247,6 +308,63 @@ class URLAnalyzer:
 
         return urls
 
+    def get_page_metadata(self, url: str) -> 'PageMetadata':
+        """Fetch and extract metadata from a webpage.
+        
+        Args:
+            url: The URL to fetch metadata from
+            
+        Returns:
+            PageMetadata object containing the results
+        """
+        if url in self._metadata_cache:
+            return self._metadata_cache[url]
+            
+        metadata = PageMetadata(url)
+        
+        try:
+            # Don't try to get metadata from certain file types
+            if any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip']):
+                metadata.mark_skipped(f"Skipping media file")
+                self._metadata_cache[url] = metadata
+                return metadata
+
+            response = self.session.get(url, timeout=self.timeout, stream=True)
+            response.raise_for_status()
+            
+            # Check if it's HTML content
+            content_type = response.headers.get('content-type', '').lower()
+            if 'text/html' not in content_type:
+                metadata.mark_skipped(f"Non-HTML content: {content_type}")
+                self._metadata_cache[url] = metadata
+                return metadata
+            
+            # Read just enough of the response to find metadata
+            content = ''
+            for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
+                content += chunk
+                if '</head>' in content.lower():
+                    break
+                if len(content) > 100000:  # Don't read more than ~100KB
+                    break
+            
+            # Extract title
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+            if title_match:
+                metadata.title = ' '.join(title_match.group(1).strip().split())
+            
+            metadata.mark_success(content_type)
+            self._metadata_cache[url] = metadata
+            logger.debug(f"Successfully fetched metadata for {url}")
+            return metadata
+                
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            metadata.mark_failed(error_msg)
+            logger.debug(f"Failed to fetch metadata for {url}: {error_msg}")
+            self._metadata_cache[url] = metadata
+            return metadata
+
     def analyze_archive(self, archive_path: Path) -> pd.DataFrame:
         """Analyze URLs in a single archive file."""
         try:
@@ -273,6 +391,24 @@ class URLAnalyzer:
                             raw_domain = parsed.netloc
                             # If it's a shortened URL that failed to resolve, mark as unresolved
                             is_resolved = not (raw_domain in self.shortener_domains)
+                            
+                            # Check if it's a Twitter internal link
+                            is_twitter_internal = bool(re.match(
+                                r'https?://(?:(?:www\.|m\.)?twitter\.com|x\.com)/\w+/status/',
+                                url
+                            ))
+                            
+                            # Get the page metadata if:
+                            # 1. It's not a shortened URL or was resolved successfully
+                            # 2. It's not a Twitter internal link
+                            metadata = None
+                            if is_resolved and not is_twitter_internal:
+                                metadata = self.get_page_metadata(url)
+                            elif is_twitter_internal:
+                                # Create metadata object but mark as skipped for Twitter internal links
+                                metadata = PageMetadata(url)
+                                metadata.mark_skipped("Twitter internal link")
+                            
                             url_data.append({
                                 'username': username,
                                 'tweet_id': tweet_id,
@@ -284,7 +420,14 @@ class URLAnalyzer:
                                 'path': parsed.path,
                                 'query': parsed.query,
                                 'fragment': parsed.fragment,
-                                'is_resolved': is_resolved
+                                'is_resolved': is_resolved,
+                                **(metadata.to_dict() if metadata else {
+                                    'title': None,
+                                    'fetch_status': 'not_attempted',
+                                    'fetch_error': None,
+                                    'content_type': None,
+                                    'last_fetch_time': None
+                                })
                             })
             
             return pd.DataFrame(url_data)
@@ -409,6 +552,15 @@ def main():
     print(f"Archives analyzed: {df['username'].nunique()}")
     print(f"Total URLs found: {len(df)}")
     print(f"Unique URLs: {df['url'].nunique()}")
+    
+    # Metadata fetch statistics
+    print("\nMetadata Fetch Statistics:")
+    fetch_stats = df['fetch_status'].value_counts()
+    print(fetch_stats)
+    
+    if 'failed' in fetch_stats:
+        print("\nTop failure reasons:")
+        print(df[df['fetch_status'] == 'failed']['fetch_error'].value_counts().head())
     
     # Create masks for different categories
     unresolved_mask = (~df['is_resolved']) & (df['raw_domain'].isin(analyzer.shortener_domains))
