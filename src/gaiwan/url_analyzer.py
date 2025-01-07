@@ -18,11 +18,6 @@ import functools
 logger = logging.getLogger(__name__)
 
 """URL Analyzer for Twitter Archives.
-
-This module analyzes URLs found in Twitter archive data, providing insights into link sharing
-patterns across the community. It handles URL shorteners (t.co, bit.ly, etc.), normalizes
-domains, and creates a queryable DataFrame of all URLs.
-
 Usage:
     Basic analysis:
         python -m gaiwan.url_analyzer archives
@@ -36,12 +31,6 @@ Usage:
     Enable debug logging:
         python -m gaiwan.url_analyzer archives --debug
 
-Features:
-    - Resolves shortened URLs (t.co, bit.ly, etc.)
-    - Normalizes domains (e.g., youtu.be -> youtube.com)
-    - Incremental processing (only analyzes new archives)
-    - Creates backups of existing analysis
-    - Produces a pandas DataFrame with detailed URL data
 
 Output DataFrame columns:
     - username: Who shared the URL
@@ -127,12 +116,6 @@ class PageMetadata:
 class URLAnalyzer:
     """Analyzes URLs in Twitter archive data.
     
-    This class processes Twitter archive files to extract and analyze URLs, handling:
-    - URL extraction from tweet text and entities
-    - Resolution of shortened URLs (t.co, bit.ly, etc.)
-    - Domain normalization (grouping related domains)
-    - Creation of analyzable DataFrame
-    
     Args:
         archive_dir (Path): Directory containing Twitter archive files
             (expected format: username_archive.json)
@@ -173,14 +156,9 @@ class URLAnalyzer:
 
         # Add domain normalization rules
         self.domain_groups = {
-            'twitter.com': ['twitter.com', 'x.com', 'www.twitter.com', 'm.twitter.com'],
+            'twitter.com': [lambda domain: domain.endswith('.x.com'), lambda domain: domain.endswith('.twitter.com')],
             'youtube.com': ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com'],
-            'wikipedia.org': [
-                'wikipedia.org', 
-                'en.wikipedia.org', 'fr.wikipedia.org', 'de.wikipedia.org',
-                'en.m.wikipedia.org', 'fr.m.wikipedia.org', 'de.m.wikipedia.org',
-                'm.wikipedia.org'
-            ],
+            'wikipedia.org': lambda domain: domain.endswith("wikipedia.org"),
             'substack.com': lambda domain: domain.endswith('.substack.com'),
             'medium.com': lambda domain: domain.endswith('.medium.com'),
             'github.com': ['github.com', 'raw.githubusercontent.com', 'gist.github.com', 'm.github.com'],
