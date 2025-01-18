@@ -1,0 +1,213 @@
+{
+    "upload-options": {
+    "type": "array",
+    "required": false,
+    "path_to_id": null,
+    "sample": null,
+    "items": {}
+    },
+    "profile": {
+      "type": "array",
+    "required": false,
+    "path_to_id": null,
+    "sample": {
+          "profile": {
+              "description": {
+          "bio": "crafty jackrabbit creating the unknown",
+          "website": "https://t.co/xSI9npTa26",
+          "location": "Austin, TX"
+        },
+        "avatarMediaUrl": "https://pbs.twimg.com/profile_images/1164331163512688640/o-ueH4QB.jpg",
+        "headerMediaUrl": "https://pbs.twimg.com/profile_banners/1163927704049262592/1713935191"
+      }
+    },
+    "items": {}
+    },
+    "account": {
+      "type": "array",
+    "required": false,
+    "path_to_id": null,
+    "sample": {
+          "account": {
+        "createdVia": "oauth:3033300",
+        "username": "strangestloop",
+        "accountId": "1163927704049262592",
+        "createdAt": "2019-08-20T21:36:26.553Z",
+        "accountDisplayName": "Loopy"
+      }
+    },
+    "items": {}
+    },
+    "tweets": {
+      "type": "array",
+    "required": false,
+    "path_to_id": "tweet.id_str",
+    "sample": {
+          "tweet": {
+              "edit_info": {
+                  "initial": {
+            "editTweetIds": [
+              "1838969711670776106"
+            ],
+            "editableUntil": "2024-09-25T16:52:00.000Z",
+            "editsRemaining": "5",
+            "isEditEligible": false
+          }
+        },
+        "retweeted": false,
+        "source": "<a href=\"https://mobile.twitter.com\" rel=\"nofollow\">Twitter Web App</a>",
+              "entities": {
+          "hashtags": [],
+          "symbols": [],
+          "user_mentions": [
+            {
+              "name": "tater tot",
+              "screen_name": "parakeetnebula",
+              "indices": [
+                "0",
+                "15"
+              ],
+              "id_str": "1315801673776992256",
+              "id": "1315801673776992256"
+            }
+          ],
+          "urls": []
+        },
+        "display_text_range": [
+          "0",
+          "45"
+        ],
+        "favorite_count": "2",
+        "in_reply_to_status_id_str": "1838735682438631767",
+        "id_str": "1838969711670776106",
+        "in_reply_to_user_id": "1315801673776992256",
+        "truncated": false,
+        "retweet_count": "0",
+        "id": "1838969711670776106",
+        "in_reply_to_status_id": "1838735682438631767",
+        "created_at": "Wed Sep 25 15:52:00 +0000 2024",
+        "favorited": false,
+        "full_text": "@parakeetnebula \ud83d\udda4 at least there is man hands",
+        "lang": "en",
+        "in_reply_to_screen_name": "parakeetnebula",
+        "in_reply_to_user_id_str": "1315801673776992256"
+      }
+    },
+    "items": {}
+    },
+    "community-tweet": {
+      "type": "array",
+    "required": false,
+    "path_to_id": "tweet.id_str",
+    "sample": {
+          "tweet": {
+        "retweeted": false,
+        "source": "<a href=\"https://mobile.twitter.com\" rel=\"nofollow\">Twitter Web App</a>",
+              "entities": {
+          "hashtags": [],
+          "symbols": [],
+          "user_mentions": [],
+          "urls": []
+        },
+        "display_text_range": [
+          "0",
+          "127"
+        ],
+        "favorite_count": "8",
+        "id_str": "1524073814023356416",
+              "scopes": {
+          "followers": false
+        },
+        "truncated": false,
+        "retweet_count": "0",
+        "id": "1524073814023356416",
+        "community_id": "1515995769983098881",
+        "community_id_str": "1515995769983098881",
+        "created_at": "Tue May 10 17:08:07 +0000 2022",
+        "favorited": false,
+        "full_text": "will slowly eat, journal, do laundry, have a few calls, schedule podcast release, learn how to tie a tie, pack, read introspect",
+        "lang": "en"
+      }
+    },
+    "items": {}
+    },
+    "follower": {
+      "type": "array",
+    "required": false,
+    "path_to_id": null,
+    "sample": {
+          "follower": {
+        "accountId": "23849680",
+        "userLink": "https://twitter.com/intent/user?user_id=23849680"
+      }
+    },
+    "items": {}
+    },
+    "following": {
+      "type": "array",
+    "required": false,
+    "path_to_id": null,
+    "sample": {
+          "following": {
+        "accountId": "1549539284285374469",
+        "userLink": "https://twitter.com/intent/user?user_id=1549539284285374469"
+      }
+    },
+    "items": {}
+    },
+    "note-tweet": {
+      "type": "array",
+    "required": false,
+    "path_to_id": "noteTweet.noteTweetId",
+    "sample": {
+          "noteTweet": {
+        "noteTweetId": "1752783272625491968",
+        "updatedAt": "2024-01-31T19:57:52.000Z",
+              "lifecycle": {
+          "value": "1",
+          "name": "Active",
+          "originalName": "Active",
+          "annotations": {}
+        },
+        "createdAt": "2024-01-31T19:57:51.000Z",
+              "core": {
+          "styletags": [],
+          "urls": [
+            {
+              "expandedUrl": "https://twitter.com/tasshinfogleman/status/1561937463064633347",
+              "toIndex": "331",
+              "shortUrl": "https://t.co/Q32MuxLVx8",
+              "displayUrl": "twitter.com/tasshinfoglema\u2026",
+              "fromIndex": "308"
+            }
+          ],
+          "text": "The phrase \"love for my brothers, power for my sisters\" is a frame that helps me better understand the people in my life and the world around me. Tasshin tweeted the phrase two years ago; it has been clarifying and inspiring to me.\n\nWe want to see what visual artwork you\u2019d make that expresses this message!\nhttps://t.co/Q32MuxLVx8",
+          "mentions": [],
+          "cashtags": [],
+          "hashtags": []
+        }
+      }
+    },
+    "items": {}
+    },
+    "like": {
+      "type": "array",
+    "required": false,
+    "path_to_id": "like.tweetId",
+    "sample": {
+          "like": {
+        "tweetId": "1838608636744245640",
+        "fullText": "i didn't expect this, but these ~monthly calls have become a really sacred, sweet fixture of my life to periodically check in. if any men want to join, shoot me a dm https://t.co/skj9sS9rrZ",
+        "expandedUrl": "https://twitter.com/i/web/status/1838608636744245640"
+      }
+    },
+    "items": {}
+    },
+    "_metadata": {
+    "type": "array",
+    "required": false,
+    "path_to_id": null,
+    "sample": null,
+    "items": {}
+  }
+}
