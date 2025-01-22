@@ -1,0 +1,185 @@
+from pathlib import Path
+import re
+import logging
+from typing import Dict, Set, Optional
+import requests
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
+import functools
+import pandas as pd
+from datetime import datetime
+from urllib.parse import urlparse
+
+from .metadata import URLMetadata
+from .domain import DomainNormalizer
+
+logger = logging.getLogger(__name__)
+
+class URLAnalyzer:
+    """Analyzes URLs in Twitter archive data."""
+    
+    def __init__(self, archive_dir: Path):
+        self.archive_dir = archive_dir
+        self.domain_normalizer = DomainNormalizer()
+        self._setup_url_pattern()
+        self._setup_http_session()
+        self._setup_caches()
+        
+    def _setup_url_pattern(self):
+        """Initialize URL matching pattern."""
+        self.url_pattern = re.compile(
+            r'https?://(?:(?:www\.)?twitter\.com/[a-zA-Z0-9_]+/status/[0-9]+|'
+            r'(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+)'
+        )
+        
+    def _setup_http_session(self):
+        """Configure HTTP session with retries and headers."""
+        self.session = requests.Session()
+        retries = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504]
+        )
+        self.session.mount('http://', HTTPAdapter(max_retries=retries))
+        self.session.mount('https://', HTTPAdapter(max_retries=retries))
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        })
+        self.timeout = 10
+        
+    def _setup_caches(self):
+        """Initialize URL and metadata caches."""
+        self._url_cache: Dict[str, Optional[str]] = {}
+        self._metadata_cache: Dict[str, URLMetadata] = {}
+
+    @functools.lru_cache(maxsize=10000)
+    def resolve_url(self, short_url: str) -> Optional[str]:
+        """Resolve a shortened URL by following redirects."""
+        if short_url in self._url_cache:
+            return self._url_cache[short_url]
+
+        try:
+            response = self.session.head(
+                short_url, 
+                allow_redirects=True,
+                timeout=5
+            )
+            resolved_url = response.url
+            self._url_cache[short_url] = resolved_url
+            return resolved_url
+        except Exception as e:
+            logger.debug(f"Failed to resolve {short_url}: {e}")
+            self._url_cache[short_url] = None
+            return None
+
+    def extract_urls_from_tweet(self, tweet_data: Dict) -> Set[str]:
+        """Extract URLs from a tweet object."""
+        urls = set()
+        
+        # Extract from tweet text
+        if 'text' in tweet_data:
+            urls.update(self.url_pattern.findall(tweet_data['text']))
+        
+        # Extract from entities
+        if 'entities' in tweet_data and 'urls' in tweet_data['entities']:
+            for url_entity in tweet_data['entities']['urls']:
+                if 'expanded_url' in url_entity:
+                    urls.add(url_entity['expanded_url'])
+                elif 'url' in url_entity:
+                    short_url = url_entity['url']
+                    if self.domain_normalizer.is_shortener(urlparse(short_url).netloc):
+                        resolved = self.resolve_url(short_url)
+                        urls.add(resolved if resolved else short_url)
+                    else:
+                        urls.add(short_url)
+
+        return urls
+    
+    def analyze_archive(self, archive_path: Path) -> pd.DataFrame:
+        """Analyze URLs in a single archive file."""
+        try:
+            with open(archive_path, 'rb') as f:
+                data = orjson.loads(f.read())
+            
+            url_data = []
+            username = archive_path.stem.replace('_archive', '')
+            
+            # Process tweets section
+            for section in ['tweets', 'community-tweet', 'note-tweet']:
+                for tweet_data in data.get(section, []):
+                    if 'tweet' in tweet_data:
+                        tweet = tweet_data['tweet']
+                        tweet_id = tweet.get('id_str')
+                        created_at = datetime.strptime(
+                            tweet.get('created_at', ''), 
+                            "%a %b %d %H:%M:%S %z %Y"
+                        ) if tweet.get('created_at') else None
+                        
+                        urls = self.extract_urls_from_tweet(tweet)
+                        for url in urls:
+                            parsed = urlparse(url)
+                            raw_domain = parsed.netloc
+                            is_resolved = not (raw_domain in self.domain_normalizer.shortener_domains)
+                            
+                            # Check if it's a Twitter internal link
+                            is_twitter_internal = bool(re.match(
+                                r'https?://(?:(?:www\.|m\.)?twitter\.com|x\.com)/\w+/status/',
+                                url
+                            ))
+                            
+                            # Get metadata for non-Twitter URLs
+                            metadata = None
+                            if is_resolved and not is_twitter_internal:
+                                metadata = self.get_page_metadata(url)
+                            elif is_twitter_internal:
+                                metadata = URLMetadata(url)
+                                metadata.mark_skipped("Twitter internal link")
+                                
+                            url_data.append({
+                                'username': username,
+                                'tweet_id': tweet_id,
+                                'tweet_created_at': created_at,
+                                'url': url,
+                                'domain': self.domain_normalizer.normalize(parsed.netloc),
+                                'raw_domain': raw_domain,
+                                'protocol': parsed.scheme,
+                                'path': parsed.path,
+                                'query': parsed.query,
+                                'fragment': parsed.fragment,
+                                'is_resolved': is_resolved,
+                                **(metadata.to_dict() if metadata else {
+                                    'title': None,
+                                    'fetch_status': 'not_attempted',
+                                    'fetch_error': None,
+                                    'content_type': None,
+                                    'last_fetch_time': None
+                                })
+                            })
+            return pd.DataFrame(url_data)
+            
+        except Exception as e:
+            logger.error(f"Error processing {archive_path}: {e}")
+            return pd.DataFrame()     
+    
+    def analyze_archives(self) -> pd.DataFrame:
+        """Analyze all archives and return a DataFrame."""
+        archives = list(self.archive_dir.glob("*_archive.json"))
+        logger.info(f"Found {len(archives)} archives to analyze")
+        
+        dfs = []
+        for archive in tqdm(archives, desc="Analyzing archives"):
+            df = self.analyze_archive(archive)
+            if not df.empty:
+                dfs.append(df)
+        
+        if dfs:
+            combined_df = pd.concat(dfs, ignore_index=True)
+            logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
+            return combined_df
+        return pd.DataFrame()
+
+
+    
+    
