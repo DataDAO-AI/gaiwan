@@ -1,7 +1,7 @@
 """ A collection of types used by several modules within the project """
 from dataclasses import dataclass
 import datetime
-from typing import Literal
+from typing import Dict, Any, List, Optional, Union, Literal
 
 @dataclass
 class MediaFile:
@@ -9,7 +9,7 @@ class MediaFile:
     id: str
     content_type: str
     path: str
-    metadata: dict[str, any]
+    metadata: Dict[str, Any]
 
 
 @dataclass
@@ -18,9 +18,9 @@ class Tweet:
     id: str
     parent_id: str
     text: str
-    media: list[MediaFile]
-    metadata: dict[str, any]
-    timestamp: datetime
+    media: List[MediaFile]
+    metadata: Dict[str, Any]
+    timestamp: datetime.datetime
     content_source: str
 
 
@@ -28,11 +28,16 @@ class Tweet:
 class ConvoThread:
     """ Data Class for Tweet ConvoThreads """
     id: str
-    tweets: list[Tweet]
-    metadata: dict[str, any]
+    tweets: List[Tweet]
+    metadata: Dict[str, Any]
 
 @dataclass
 class Message:
     """ Data Class for turns in a conversation for ChatML """
     role: Literal["user", "agent"]   #Other roles can be added as needed
     content: str
+
+# Type alias for content that can be processed
+Content = Union[Tweet, Message, MediaFile]
+
+__all__ = ['MediaFile', 'Tweet', 'ConvoThread', 'Message', 'Content']

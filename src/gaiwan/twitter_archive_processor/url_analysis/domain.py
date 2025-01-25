@@ -10,10 +10,12 @@ class DomainNormalizer:
         'ow.ly', 'goo.gl', 'tiny.cc', 'is.gd'
     })
     
-    domain_groups: Dict[str, Union[List[str], Callable]] = field(default_factory=lambda: {
+    domain_groups: Dict[str, Union[List[Union[str, Callable]], Callable]] = field(default_factory=lambda: {
         'twitter.com': [
-            lambda d: d.endswith('.x.com'),
-            lambda d: d.endswith('.twitter.com')
+            'twitter.com', 'x.com',  # Direct matches
+            'www.twitter.com', 'm.twitter.com',
+            lambda d: d.endswith('.x.com'),  # Subdomains of x.com
+            lambda d: d.endswith('.twitter.com')  # Subdomains of twitter.com
         ],
         'youtube.com': [
             'youtube.com', 'www.youtube.com', 
@@ -39,8 +41,12 @@ class DomainNormalizer:
         # Check domain groups
         for main_domain, matchers in self.domain_groups.items():
             if isinstance(matchers, list):
-                if domain in matchers:
-                    return main_domain
+                for matcher in matchers:
+                    if callable(matcher):
+                        if matcher(domain):
+                            return main_domain
+                    elif domain == matcher:  # Direct string comparison
+                        return main_domain
             elif callable(matchers):
                 if matchers(domain):
                     return main_domain

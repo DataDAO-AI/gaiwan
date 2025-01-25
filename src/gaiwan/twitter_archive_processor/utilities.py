@@ -9,9 +9,9 @@ from concurrent import futures
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 
-from gaiwan.models import CanonicalTweet, TweetMetadata
-from twitter_archive_processor.coretypes import Tweet
-from twitter_archive_processor.extraction import clean_json_string, extract_tweet
+from .models import CanonicalTweet, TweetMetadata
+from .coretypes import Tweet
+from .common import load_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -38,31 +38,6 @@ def clean_text(text: str, entities: Optional[dict[str, any]] = None) -> str:
     text = text.strip() #Remove leading and trailing spaces
 
     return text
-
-def load_json_file(file_path: str) -> any:
-    """ load json data with allowances for various wrappings in data file """
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            raw_string = file.read()
-            cleaned_string = clean_json_string(raw_string)
-            data = json.loads(cleaned_string)
-
-            return data
-    except json.JSONDecodeError:
-        #might be wrapped differently
-        with open(file_path, 'r', encoding='utf=8') as f:
-            raw_content = f.read()
-        #extract from JS variable?
-        match = re.search(r'window\.__THAR_CONFIG\s*=\s*{{.*}}', raw_content, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-        else:
-            logger.error("Failed to parse JSON from %s", file_path)
-
-            return None
-    except Exception as e:
-        logger.warning("Error processing file '%s', %s", file_path, e)
-        return None
 
 def convert_to_canonical_tweet(tweet: Tweet) -> CanonicalTweet:
     """Convert Tweet to CanonicalTweet format"""

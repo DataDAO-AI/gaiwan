@@ -2,7 +2,7 @@
 
 from typing import Dict, Literal, Tuple
 
-from twitter_archive_processor.coretypes import ConvoThread, Message, Tweet
+from .coretypes import ConvoThread, Message, Tweet
 
 def extract_threads_and_conversations(
         all_content: Dict[str, Tweet]

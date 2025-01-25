@@ -9,6 +9,7 @@ import functools
 import pandas as pd
 from datetime import datetime
 from urllib.parse import urlparse
+import orjson
 
 from .metadata import URLMetadata
 from .domain import DomainNormalizer
@@ -78,23 +79,20 @@ class URLAnalyzer:
         """Extract URLs from a tweet object."""
         urls = set()
         
-        # Extract from tweet text
-        if 'text' in tweet_data:
-            urls.update(self.url_pattern.findall(tweet_data['text']))
+        # Extract from tweet text using regex
+        if 'full_text' in tweet_data:
+            text = tweet_data['full_text']
+            matches = re.findall(r'https?://[^\s]+', text)
+            urls.update(matches)
         
-        # Extract from entities
+        # Extract from entities if present
         if 'entities' in tweet_data and 'urls' in tweet_data['entities']:
             for url_entity in tweet_data['entities']['urls']:
                 if 'expanded_url' in url_entity:
                     urls.add(url_entity['expanded_url'])
                 elif 'url' in url_entity:
-                    short_url = url_entity['url']
-                    if self.domain_normalizer.is_shortener(urlparse(short_url).netloc):
-                        resolved = self.resolve_url(short_url)
-                        urls.add(resolved if resolved else short_url)
-                    else:
-                        urls.add(short_url)
-
+                    urls.add(url_entity['url'])
+        
         return urls
     
     def analyze_archive(self, archive_path: Path) -> pd.DataFrame:
@@ -107,62 +105,37 @@ class URLAnalyzer:
             username = archive_path.stem.replace('_archive', '')
             
             # Process tweets section
-            for section in ['tweets', 'community-tweet', 'note-tweet']:
-                for tweet_data in data.get(section, []):
-                    if 'tweet' in tweet_data:
-                        tweet = tweet_data['tweet']
-                        tweet_id = tweet.get('id_str')
-                        created_at = datetime.strptime(
-                            tweet.get('created_at', ''), 
-                            "%a %b %d %H:%M:%S %z %Y"
-                        ) if tweet.get('created_at') else None
-                        
-                        urls = self.extract_urls_from_tweet(tweet)
-                        for url in urls:
-                            parsed = urlparse(url)
-                            raw_domain = parsed.netloc
-                            is_resolved = not (raw_domain in self.domain_normalizer.shortener_domains)
-                            
-                            # Check if it's a Twitter internal link
-                            is_twitter_internal = bool(re.match(
-                                r'https?://(?:(?:www\.|m\.)?twitter\.com|x\.com)/\w+/status/',
-                                url
-                            ))
-                            
-                            # Get metadata for non-Twitter URLs
-                            metadata = None
-                            if is_resolved and not is_twitter_internal:
-                                metadata = self.get_page_metadata(url)
-                            elif is_twitter_internal:
-                                metadata = URLMetadata(url)
-                                metadata.mark_skipped("Twitter internal link")
-                                
-                            url_data.append({
-                                'username': username,
-                                'tweet_id': tweet_id,
-                                'tweet_created_at': created_at,
-                                'url': url,
-                                'domain': self.domain_normalizer.normalize(parsed.netloc),
-                                'raw_domain': raw_domain,
-                                'protocol': parsed.scheme,
-                                'path': parsed.path,
-                                'query': parsed.query,
-                                'fragment': parsed.fragment,
-                                'is_resolved': is_resolved,
-                                **(metadata.to_dict() if metadata else {
-                                    'title': None,
-                                    'fetch_status': 'not_attempted',
-                                    'fetch_error': None,
-                                    'content_type': None,
-                                    'last_fetch_time': None
-                                })
-                            })
+            for tweet_data in data.get('tweets', []):
+                if 'tweet' in tweet_data:
+                    tweet = tweet_data['tweet']
+                    tweet_id = tweet.get('id_str')
+                    created_at = datetime.strptime(
+                        tweet.get('created_at', ''), 
+                        "%a %b %d %H:%M:%S %z %Y"
+                    ) if tweet.get('created_at') else None
+                    
+                    urls = self.extract_urls_from_tweet(tweet)
+                    for url in urls:
+                        parsed = urlparse(url)
+                        url_data.append({
+                            'username': username,
+                            'tweet_id': tweet_id,
+                            'tweet_created_at': created_at,
+                            'url': url,
+                            'domain': self.domain_normalizer.normalize(parsed.netloc),
+                            'raw_domain': parsed.netloc,
+                            'protocol': parsed.scheme,
+                            'path': parsed.path,
+                            'query': parsed.query,
+                            'fragment': parsed.fragment
+                        })
+            
             return pd.DataFrame(url_data)
             
         except Exception as e:
             logger.error(f"Error processing {archive_path}: {e}")
-            return pd.DataFrame()     
-    
+            return pd.DataFrame()
+
     def analyze_archives(self) -> pd.DataFrame:
         """Analyze all archives and return a DataFrame."""
         archives = list(self.archive_dir.glob("*_archive.json"))

@@ -1,25 +1,17 @@
 """ Functions to extract data from files and parse content """
 
-from datetime import datetime
+import datetime
 import os
 import re
 import logging
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional, List
 
-from twitter_archive_processor.coretypes import MediaFile, Message, Tweet
-from twitter_archive_processor.utilities import load_json_file, process_data_for_type, clean_text
-from twitter_archive_processor.transformation import format_message, \
+from .coretypes import MediaFile, Message, Tweet, Content
+from .common import clean_json_string, load_json_file
+from .transformation import format_message, \
     trim_conversation_to_last_assistant
 
 logger = logging.getLogger(__name__)
-
-def clean_json_string(json_string: str) -> str:
-    """ remove leading and trailing patterns """
-    #Clean the leading pattern:
-    cleaned = re.sub(r'^window\.[^=]+=]+=\s*', '' , json_string.strip())
-    #Clean the trailing pattern:
-    return cleaned.rstrip(';')
-
 
 def extract_manifest(archive_path: str) -> Dict[str, Any]:
     """ load manifest data """
@@ -68,7 +60,7 @@ def extract_tweet(item: dict[str, Any], content_source: str, media_dir:str) -> O
     #Check actual file type to verify which one is used
     text = item.get['text'] or item.get('full_text') or item.get('fullText', '')
     #Check keys used in data
-    timestamp = datetime.strptime(item['created_at'], '%a %b %d %H:%M:%S %z %Y')
+    timestamp = datetime.datetime.strptime(item['created_at'], '%a %b %d %H:%M:%S %z %Y')
     parent_id = item.get('in_reply_to_status_id', None)
 
     #Append associated media files
@@ -154,28 +146,15 @@ def extract_archive_data(archive_path: str) -> Dict[str, list[Tweet]]:
 
     return results
 
-def get_conversation_data(contents: list[Content]) -> list[Message]:
-    """ obtain conversation data """
-    conversation_data = []
-    current_role = None
-    buffer = []
-
-    for text, role in get_conversation_texts(contents):
-        cleaned = clean_text(text, contents[0].metadata.get('entities'))
-        if not cleaned:
-            continue
-        if role != current_role:
-            if buffer and current_role:
-                conversation_data.append(format_message(buffer, current_role))
-                buffer = []
-            current_role = role
-        buffer.append(cleaned)
-
-    if buffer and current_role:
-        conversation_data.append(format_message(buffer, current_role))
-
-    conversation_data = trim_conversation_to_last_assistant(conversation_data)
-    return conversation_data
+def get_conversation_data(contents: List[Content]) -> List[Message]:
+    """Extract conversation data from content."""
+    messages = []
+    for content in contents:
+        if isinstance(content, Tweet):
+            messages.append(Message(role='user', content=content.text))
+            for media in content.media:
+                messages.append(Message(role='assistant', content=media.path))
+    return messages
 
 def get_conversation_texts(contents: list[Content]) -> list[Tuple[str, str]]:
     """ obrain converation text content bodies """
