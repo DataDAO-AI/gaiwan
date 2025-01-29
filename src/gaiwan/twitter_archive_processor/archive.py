@@ -5,7 +5,8 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import pandas as pd
 
-from .tweet import Tweet
+from .tweets.factory import TweetFactory
+from .tweets.base import BaseTweet
 from .url_analysis import URLAnalyzer
 from .metadata import TweetMetadata
 from .conversation import ConversationThread
@@ -19,7 +20,7 @@ class Archive:
     def __init__(self, archive_path: Path):
         self.archive_path = archive_path
         self.username: Optional[str] = None
-        self.tweets: List[Tweet] = []
+        self.tweets: List[BaseTweet] = []  # Now using BaseTweet
         self.url_analyzer = URLAnalyzer(archive_path)
         self.metadata: Dict = {}
         
@@ -35,11 +36,14 @@ class Archive:
                 self.username = account['username']
                 self.metadata['account'] = account
             
-            # Process different tweet types
-            self._process_tweets(data.get('tweets', []), 'tweet')
-            self._process_tweets(data.get('community-tweet', []), 'community')
-            self._process_tweets(data.get('note-tweet', []), 'note')
-            self._process_tweets(data.get('like', []), 'like')
+            # Process different tweet types using factory
+            for tweet_type, key in [
+                ('tweet', 'tweets'),
+                ('community', 'community-tweet'),
+                ('note', 'note-tweet'),
+                ('like', 'like')
+            ]:
+                self._process_tweets(data.get(key, []), tweet_type)
             
             logger.info(f"Loaded {len(self.tweets)} tweets from {self.username}'s archive")
             
@@ -48,19 +52,19 @@ class Archive:
             raise
     
     def _process_tweets(self, tweets_data: List[Dict], tweet_type: str) -> None:
-        """Process tweets of a specific type."""
+        """Process tweets of a specific type using the factory."""
         for tweet_data in tweets_data:
+            # Extract the actual tweet data based on type
             if tweet_type in ('tweet', 'community'):
                 data = tweet_data.get('tweet', {})
             elif tweet_type == 'note':
-                data = tweet_data.get('noteTweet', {})
-                # For note tweets, we need to handle the different structure
-                if 'core' in data:
-                    data = {
-                        'id_str': data.get('noteTweetId'),
-                        'text': data['core'].get('text', ''),
-                        'created_at': data.get('createdAt')
-                    }
+                note_data = tweet_data.get('noteTweet', {})
+                # For note tweets, handle the different structure
+                data = {
+                    'noteTweetId': note_data.get('noteTweetId'),
+                    'core': note_data.get('core', {}),
+                    'createdAt': note_data.get('createdAt')
+                }
             else:  # like
                 data = tweet_data.get('like', {})
                 # For likes, ensure we have the right text field
@@ -68,47 +72,9 @@ class Archive:
                     data['text'] = data['fullText']
             
             if data:
-                tweet = self._create_tweet(data, tweet_type)
+                tweet = TweetFactory.create_tweet(data, tweet_type)
                 if tweet:
                     self.tweets.append(tweet)
-    
-    def _create_tweet(self, tweet_data: Dict, tweet_type: str) -> Optional[Tweet]:
-        """Create a Tweet object from raw data."""
-        try:
-            # Extract basic tweet info
-            tweet_id = tweet_data.get('id_str') or tweet_data.get('tweetId')
-            if not tweet_id:
-                return None
-                
-            # Parse timestamp
-            created_at = tweet_data.get('created_at')
-            if created_at:
-                timestamp = datetime.strptime(
-                    created_at, 
-                    "%a %b %d %H:%M:%S %z %Y"
-                )
-            else:
-                timestamp = None
-            
-            # Create metadata
-            metadata = TweetMetadata(
-                tweet_type=tweet_type,
-                raw_data=tweet_data,
-                urls=self.url_analyzer.extract_urls_from_tweet(tweet_data)
-            )
-            
-            return Tweet(
-                id=tweet_id,
-                text=tweet_data.get('full_text') or tweet_data.get('text', ''),
-                created_at=timestamp,
-                media=tweet_data.get('extended_entities', {}).get('media', []),
-                parent_id=tweet_data.get('in_reply_to_status_id_str'),
-                metadata=metadata
-            )
-            
-        except Exception as e:
-            logger.warning(f"Error creating tweet object: {e}")
-            return None
     
     def analyze_urls(self) -> pd.DataFrame:
         """Analyze URLs in the archive using URLAnalyzer."""

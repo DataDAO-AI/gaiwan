@@ -2,13 +2,13 @@ import pytest
 from pathlib import Path
 from datetime import datetime, timezone
 from ..export import MarkdownExporter
-from ..tweet import Tweet
+from ..tweets.types import StandardTweet
 from ..metadata import TweetMetadata
 from ..conversation import ConversationThread
 
 @pytest.fixture
 def sample_tweet():
-    return Tweet(
+    return StandardTweet(
         id="123",
         text="Test tweet with **markdown** formatting",
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -26,7 +26,7 @@ def sample_tweet():
 
 @pytest.fixture
 def sample_thread(sample_tweet):
-    reply = Tweet(
+    reply = StandardTweet(
         id="456",
         text="Test reply",
         created_at=datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
@@ -70,7 +70,7 @@ def test_markdown_export_thread(sample_thread, tmp_path):
 
 def test_markdown_export_tweets_chronological_order(tmp_path):
     tweets = [
-        Tweet(
+        StandardTweet(
             id=str(i),
             text=f"Tweet {i}",
             created_at=datetime(2024, 1, i, tzinfo=timezone.utc),
@@ -94,7 +94,7 @@ def test_markdown_export_tweets_chronological_order(tmp_path):
     assert content.index("Tweet 1") < content.index("Tweet 2") < content.index("Tweet 3")
 
 def test_markdown_export_with_missing_timestamp(sample_tweet, tmp_path):
-    tweet_no_time = Tweet(
+    tweet_no_time = StandardTweet(
         id="999",
         text="Tweet with no timestamp",
         created_at=None,

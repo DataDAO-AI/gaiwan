@@ -3,7 +3,9 @@ from pathlib import Path
 import json
 from datetime import datetime
 from ..archive import Archive
-from ..tweet import Tweet
+from ..tweets.base import BaseTweet
+from ..tweets.factory import TweetFactory
+from ..tweets.types import StandardTweet
 
 @pytest.fixture
 def sample_archive_data():
@@ -71,9 +73,10 @@ def test_tweet_creation(sample_archive_file, sample_archive_data):
     archive = Archive(sample_archive_file)
     tweet_data = sample_archive_data['tweets'][0]['tweet']
     
-    tweet = archive._create_tweet(tweet_data, 'tweet')
+    # Now using TweetFactory directly since Archive uses it internally
+    tweet = TweetFactory.create_tweet(tweet_data, 'tweet')
     
-    assert isinstance(tweet, Tweet)
+    assert isinstance(tweet, BaseTweet)  # or StandardTweet if you want to be more specific
     assert tweet.id == "123456789"
     assert tweet.text == "This is a test tweet"
     assert isinstance(tweet.created_at, datetime)

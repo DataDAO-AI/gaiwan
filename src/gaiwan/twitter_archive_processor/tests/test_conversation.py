@@ -1,13 +1,15 @@
 import pytest
 from datetime import datetime, timezone
-from ..conversation import ConversationThread
-from ..tweet import Tweet
+from pathlib import Path
+
+from ..tweets.types import StandardTweet
 from ..metadata import TweetMetadata
+from ..conversation import ConversationThread
 
 @pytest.fixture
 def sample_tweets():
     """Create sample tweets for testing."""
-    root = Tweet(
+    root = StandardTweet(
         id="123",
         text="Root tweet",
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -20,7 +22,7 @@ def sample_tweets():
         )
     )
     
-    reply1 = Tweet(
+    reply1 = StandardTweet(
         id="456",
         text="First reply",
         created_at=datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
@@ -33,7 +35,7 @@ def sample_tweets():
         )
     )
     
-    reply2 = Tweet(
+    reply2 = StandardTweet(
         id="789",
         text="Second reply",
         created_at=datetime(2024, 1, 1, 0, 30, tzinfo=timezone.utc),  # Between root and reply1
@@ -87,7 +89,7 @@ def test_replies_chronological_order(sample_tweets):
 def test_thread_with_missing_timestamps(sample_tweets):
     root, reply1, _ = sample_tweets
     # Create a reply with no timestamp
-    reply_no_time = Tweet(
+    reply_no_time = StandardTweet(
         id="999",
         text="Reply with no timestamp",
         created_at=None,

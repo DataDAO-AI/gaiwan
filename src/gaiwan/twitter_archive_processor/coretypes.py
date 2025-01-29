@@ -11,33 +11,14 @@ class MediaFile:
     path: str
     metadata: Dict[str, Any]
 
-
-@dataclass
-class Tweet:
-    """ Data Class for Individual Tweets """
-    id: str
-    parent_id: str
-    text: str
-    media: List[MediaFile]
-    metadata: Dict[str, Any]
-    timestamp: datetime.datetime
-    content_source: str
-
-
-@dataclass
-class ConvoThread:
-    """ Data Class for Tweet ConvoThreads """
-    id: str
-    tweets: List[Tweet]
-    metadata: Dict[str, Any]
-
 @dataclass
 class Message:
     """ Data Class for turns in a conversation for ChatML """
-    role: Literal["user", "agent"]   #Other roles can be added as needed
+    role: Literal["user", "agent"]
     content: str
 
-# Type alias for content that can be processed
-Content = Union[Tweet, Message, MediaFile]
+# Update Content type to use BaseTweet
+from .tweets.base import BaseTweet
+Content = Union[BaseTweet, Message, MediaFile]
 
-__all__ = ['MediaFile', 'Tweet', 'ConvoThread', 'Message', 'Content']
+__all__ = ['MediaFile', 'Message', 'Content']
