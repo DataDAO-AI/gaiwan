@@ -40,3 +40,7 @@ wheels/
 !gaiwan/__init__.py
 !gaiwan/mixpr.py
 output/
+
+# Twitter Archives
+archives/
+*_archive.json
