@@ -1,39 +1,24 @@
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List, Dict, Set
-
+from typing import List, Optional, Dict, Set
+from .base import BaseTweet
 from ..metadata import TweetMetadata
 
-@dataclass
-class BaseTweet(ABC):
-    """Base class for all tweet types."""
-    id: str
-    text: str
-    created_at: Optional[datetime]
-    media: List[Dict]
-    parent_id: Optional[str]
-    metadata: TweetMetadata
-
-    @abstractmethod
-    def clean_text(self) -> str:
-        """Clean the tweet text."""
-        pass
-
-    @abstractmethod
-    def get_urls(self) -> Set[str]:
-        """Extract URLs from the tweet."""
-        pass
-
-    @abstractmethod
-    def get_mentions(self) -> Set[str]:
-        """Extract user mentions from the tweet."""
-        pass
-
-    @abstractmethod
-    def get_hashtags(self) -> Set[str]:
-        """Extract hashtags from the tweet."""
-        pass
+class StandardTweet(BaseTweet):
+    def __init__(
+        self,
+        id: str,
+        text: str,
+        created_at: Optional[datetime],
+        media: List[Dict],
+        parent_id: Optional[str],
+        metadata: TweetMetadata
+    ):
+        self.id = id
+        self.text = text
+        self.created_at = created_at
+        self.media = media
+        self.parent_id = parent_id
+        self.metadata = metadata
 
     def clean_text(self) -> str:
         """Remove mentions, URLs, and hashtags from text."""
@@ -48,7 +33,7 @@ class BaseTweet(ABC):
         # Remove hashtags
         text = ' '.join(word for word in text.split() if not word.startswith('#'))
         
-        return ' '.join(text.split())
+        return ' '.join(text.split())  # Clean up extra spaces 
 
     def get_urls(self) -> Set[str]:
         """Extract URLs from tweet metadata."""
