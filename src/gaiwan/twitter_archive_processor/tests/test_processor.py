@@ -3,6 +3,10 @@ from pathlib import Path
 import json
 import pandas as pd
 from ..processor import ArchiveProcessor
+from ..conversation import ConversationThread
+from ..tweets.types import StandardTweet
+from ..metadata import TweetMetadata
+from datetime import datetime, timezone
 
 @pytest.fixture
 def sample_archives(tmp_path):
@@ -84,3 +88,43 @@ def test_nonexistent_archive_dir():
     processor = ArchiveProcessor(Path("nonexistent_dir"))
     processor.load_archives()  # Should not raise exception but log error
     assert len(processor.archives) == 0 
+
+def test_export_conversations_oai(sample_archives, tmp_path):
+    processor = ArchiveProcessor(sample_archives)
+    processor.load_archives()
+    
+    # Create a conversation thread in the first archive
+    first_archive = processor.archives[0]
+    tweet = StandardTweet(
+        id="123",
+        text="Hello world!",
+        created_at=datetime.now(timezone.utc),
+        media=[],
+        parent_id=None,
+        metadata=TweetMetadata(tweet_type="tweet", raw_data={}, urls=set())
+    )
+    reply = StandardTweet(
+        id="456",
+        text="Hello back!",
+        created_at=datetime.now(timezone.utc),
+        media=[],
+        parent_id="123",
+        metadata=TweetMetadata(tweet_type="tweet", raw_data={}, urls=set())
+    )
+    first_archive.tweets.extend([tweet, reply])
+    
+    output_path = tmp_path / "conversations.jsonl"
+    processor.export_conversations_oai(
+        output_path,
+        system_message="Test message"
+    )
+    
+    assert output_path.exists()
+    with open(output_path) as f:
+        conversations = [json.loads(line) for line in f]
+    
+    assert len(conversations) > 0
+    for conv in conversations:
+        assert 'messages' in conv
+        assert conv['messages'][0]['role'] == 'system'
+        assert conv['messages'][0]['content'] == 'Test message' 

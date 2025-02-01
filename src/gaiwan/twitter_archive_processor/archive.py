@@ -11,6 +11,8 @@ from .url_analysis import URLAnalyzer
 from .metadata import TweetMetadata
 from .conversation import ConversationThread
 from .export import MarkdownExporter
+from .export.oai import OpenAIExporter
+from .export.chatml import ChatMLExporter
 
 logger = logging.getLogger(__name__)
 
@@ -106,12 +108,17 @@ class Archive:
     def export(self, format: str, output_path: Path) -> None:
         """Export the archive in various formats."""
         exporters = {
-            'markdown': MarkdownExporter()
-            # Add other exporters here
+            'markdown': MarkdownExporter(),
+            'oai': OpenAIExporter(),
+            'chatml': ChatMLExporter()
         }
         
         if format not in exporters:
             raise ValueError(f"Unsupported export format: {format}")
         
         exporter = exporters[format]
-        exporter.export_tweets(self.tweets, output_path)
+        if format == 'oai':
+            threads = self.get_conversation_threads()
+            exporter.export_conversations(threads, output_path, "You are a helpful assistant")
+        else:
+            exporter.export_tweets(self.tweets, output_path)
