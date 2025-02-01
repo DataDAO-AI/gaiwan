@@ -9,6 +9,9 @@ from ..conversation import ConversationThread
 class Exporter(ABC):
     """Base class for archive exporters."""
     
+    def __init__(self, system_message: str = None):
+        self.system_message = system_message
+    
     @abstractmethod
     def export_tweets(self, tweets: List[BaseTweet], output_path: Path) -> None:
         """Export tweets to the specified format."""

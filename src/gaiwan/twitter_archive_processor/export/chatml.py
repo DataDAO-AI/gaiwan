@@ -4,15 +4,15 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any
 
-from .base import Exporter
+from .oai import OpenAIExporter
 from ..tweets.base import BaseTweet
 from ..conversation import ConversationThread
 from ..coretypes import Content
 
 logger = logging.getLogger(__name__)
 
-class ChatMLExporter(Exporter):
-    """Export tweets to ChatML format."""
+class ChatMLExporter(OpenAIExporter):
+    """Export tweets to ChatML format with alternating roles."""
     
     def __init__(self, system_message: str = "You are a helpful assistant."):
         self.system_message = system_message
@@ -64,6 +64,6 @@ class ChatMLExporter(Exporter):
         return "".join(content)
     
     def _write_messages(self, messages: List[Dict[str, str]], output_path: Path) -> None:
-        """Write messages to file in ChatML format."""
+        """Write messages to file in pretty-printed JSON format."""
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump({"messages": messages}, f, indent=2) 
