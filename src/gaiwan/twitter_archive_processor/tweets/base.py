@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List, Dict, Set
+from typing import Optional, List, Dict, Set, ClassVar
 
 from ..metadata import TweetMetadata
 
@@ -33,6 +33,12 @@ class BaseTweet(ABC):
     @abstractmethod
     def get_hashtags(self) -> Set[str]:
         """Extract hashtags from the tweet."""
+        pass
+
+    @classmethod
+    @abstractmethod
+    def from_raw_data(cls, data: Dict) -> 'BaseTweet':
+        """Create a tweet from raw Twitter API data."""
         pass
 
     def clean_text(self) -> str:

@@ -8,9 +8,8 @@ from ..metadata import TweetMetadata
 class TweetFactory:
     """Factory for creating different types of tweets."""
     
-    _tweet_types: Dict[str, Type[BaseTweet]] = {
+    _tweet_types = {
         'tweet': StandardTweet,
-        'community': StandardTweet,
         'note': NoteTweet,
         'like': StandardTweet
     }
@@ -28,6 +27,10 @@ class TweetFactory:
             tweet_id = tweet_data.get('noteTweetId')
             text = tweet_data.get('core', {}).get('text', '')
             created_at = tweet_data.get('createdAt')
+        elif tweet_type == 'like':
+            tweet_id = tweet_data.get('id_str')
+            text = tweet_data.get('full_text')
+            created_at = None  # Likes might not have timestamps
         else:
             tweet_id = tweet_data.get('id_str') or tweet_data.get('tweetId')
             text = tweet_data.get('full_text') or tweet_data.get('text', '')
@@ -70,3 +73,35 @@ class TweetFactory:
             parent_id=tweet_data.get('in_reply_to_status_id_str'),
             metadata=metadata
         ) 
+
+    @staticmethod
+    def create_tweet(data: Dict, tweet_type: str) -> Optional[BaseTweet]:
+        """Create a tweet of the appropriate type."""
+        if tweet_type not in TweetFactory._tweet_types:
+            raise ValueError(f"Unknown tweet type: {tweet_type}")
+            
+        tweet_class = TweetFactory._tweet_types[tweet_type]
+        
+        if tweet_type == 'note':
+            if 'noteTweet' in data:
+                return tweet_class.from_raw_data(data['noteTweet'])
+            return None
+        elif tweet_type == 'like':
+            if 'like' in data:
+                return StandardTweet(
+                    id=data['like']['tweetId'],
+                    text=data['like']['fullText'],
+                    created_at=None,
+                    media=[],
+                    parent_id=None,
+                    metadata=TweetMetadata(
+                        tweet_type='like',
+                        raw_data=data['like'],
+                        urls=set()
+                    )
+                )
+            return None
+        else:
+            if not data.get('id_str'):
+                return None
+            return tweet_class.from_raw_data(data) 

@@ -51,4 +51,34 @@ class StandardTweet(BaseTweet):
         """Extract hashtags from tweet metadata."""
         if 'entities' in self.metadata.raw_data:
             return {hashtag['text'] for hashtag in self.metadata.raw_data['entities'].get('hashtags', [])}
-        return set() 
+        return set()
+
+    @classmethod
+    def from_raw_data(cls, data: Dict) -> 'StandardTweet':
+        """Create a StandardTweet from raw Twitter API data."""
+        media = []
+        if 'extended_entities' in data and 'media' in data['extended_entities']:
+            media = data['extended_entities']['media']
+        
+        created_at = None
+        if 'created_at' in data:
+            try:
+                created_at = datetime.strptime(
+                    data['created_at'],
+                    '%a %b %d %H:%M:%S %z %Y'
+                )
+            except ValueError:
+                pass
+        
+        return cls(
+            id=data.get('id_str'),
+            text=data.get('full_text', ''),
+            created_at=created_at,
+            media=media,
+            parent_id=data.get('in_reply_to_status_id_str'),
+            metadata=TweetMetadata(
+                tweet_type='tweet',
+                raw_data=data,
+                urls=set()
+            )
+        ) 
