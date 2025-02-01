@@ -78,4 +78,29 @@ def test_chatml_export_thread(sample_thread, tmp_path):
     assert messages[1]["role"] == "user"
     assert messages[2]["role"] == "assistant"
     assert "Test tweet with media" in messages[1]["content"]
-    assert "Test reply" in messages[2]["content"] 
+    assert "Test reply" in messages[2]["content"]
+
+def test_chatml_thread_roles(sample_thread, tmp_path):
+    exporter = ChatMLExporter(system_message="Test system message")
+    output_path = tmp_path / "test_thread.json"
+    
+    exporter.export_thread(sample_thread, output_path)
+    
+    with open(output_path) as f:
+        data = json.load(f)
+    
+    messages = data["messages"]
+    assert len(messages) == 3  # system + 2 tweets
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert messages[2]["role"] == "assistant"
+
+def test_chatml_json_format(sample_thread, tmp_path):
+    exporter = ChatMLExporter()
+    output_path = tmp_path / "test_format.json"
+    
+    exporter.export_thread(sample_thread, output_path)
+    
+    content = output_path.read_text()
+    assert "{\n" in content  # Check for pretty-printing
+    assert content.count("\n") > 3  # Should have multiple lines 

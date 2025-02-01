@@ -54,8 +54,11 @@ class StandardTweet(BaseTweet):
         return set()
 
     @classmethod
-    def from_raw_data(cls, data: Dict) -> 'StandardTweet':
+    def from_raw_data(cls, data: Dict) -> Optional['StandardTweet']:
         """Create a StandardTweet from raw Twitter API data."""
+        if not data.get('id_str'):
+            return None
+        
         media = []
         if 'extended_entities' in data and 'media' in data['extended_entities']:
             media = data['extended_entities']['media']
@@ -71,7 +74,7 @@ class StandardTweet(BaseTweet):
                 pass
         
         return cls(
-            id=data.get('id_str'),
+            id=data['id_str'],
             text=data.get('full_text', ''),
             created_at=created_at,
             media=media,

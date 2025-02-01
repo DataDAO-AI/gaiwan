@@ -58,25 +58,38 @@ def sample_archives(tmp_path):
     return archive_dir
 
 @pytest.fixture
-def sample_thread():
-    root_tweet = StandardTweet(
-        id="1",
-        text="Test tweet with **markdown** formatting",
+def sample_tweet():
+    return StandardTweet(
+        id="123",
+        text="Test tweet with media",
         created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        media=[],
+        media=[{
+            'type': 'photo',
+            'media_url': 'http://example.com/image.jpg'
+        }],
         parent_id=None,
-        metadata=TweetMetadata(tweet_type="tweet", raw_data={}, urls=set())
+        metadata=TweetMetadata(
+            tweet_type="tweet",
+            raw_data={},
+            urls=set()
+        )
     )
-    
+
+@pytest.fixture
+def sample_thread(sample_tweet):
     reply = StandardTweet(
-        id="2",
+        id="456",
         text="Test reply",
         created_at=datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
         media=[],
-        parent_id="1",
-        metadata=TweetMetadata(tweet_type="tweet", raw_data={}, urls=set())
+        parent_id="123",
+        metadata=TweetMetadata(
+            tweet_type="tweet",
+            raw_data={},
+            urls=set()
+        )
     )
     
-    thread = ConversationThread(root_tweet=root_tweet)
+    thread = ConversationThread(root_tweet=sample_tweet)
     thread.add_reply(reply)
     return thread 

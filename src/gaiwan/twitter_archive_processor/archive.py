@@ -7,80 +7,58 @@ import pandas as pd
 
 from .tweets.factory import TweetFactory
 from .tweets.base import BaseTweet
-from .url_analysis import URLAnalyzer
+from .url_analysis.analyzer import URLAnalyzer
 from .metadata import TweetMetadata
 from .conversation import ConversationThread
-from .export import MarkdownExporter
-from .export.oai import OpenAIExporter
-from .export.chatml import ChatMLExporter
+from .export.base import Exporter
 
 logger = logging.getLogger(__name__)
 
 class Archive:
     """Represents a Twitter archive with methods for analysis and processing."""
     
-    def __init__(self, archive_path: Path):
-        self.archive_path = archive_path
-        self.username: Optional[str] = None
-        self.tweets: List[BaseTweet] = []  # Now using BaseTweet
-        self.url_analyzer = URLAnalyzer(archive_path)
-        self.metadata: Dict = {}
+    def __init__(self, file_path: Path):
+        self.file_path = file_path
+        self.archive_path = file_path  # Add this for backward compatibility
+        self.username = None
+        self.tweets = []
+        self.metadata = {}
+        self.url_analyzer = URLAnalyzer(archive_dir=None)
         
     def load(self) -> None:
-        """Load and parse the archive file."""
+        """Load archive data from file."""
         try:
-            with open(self.archive_path, 'r', encoding='utf-8') as f:
+            with open(self.file_path) as f:
                 data = json.load(f)
-            
-            # Extract account info
-            if 'account' in data:
-                account = data['account'][0]['account']
-                self.username = account['username']
-                self.metadata['account'] = account
-            
-            # Process different tweet types using factory
-            for tweet_type, key in [
-                ('tweet', 'tweets'),
-                ('community', 'community-tweet'),
-                ('note', 'note-tweet'),
-                ('like', 'like')
-            ]:
-                self._process_tweets(data.get(key, []), tweet_type)
-            
-            logger.info(f"Loaded {len(self.tweets)} tweets from {self.username}'s archive")
-            
-        except Exception as e:
-            logger.error(f"Error loading archive {self.archive_path}: {e}")
-            raise
-    
-    def _process_tweets(self, tweets_data: List[Dict], tweet_type: str) -> None:
-        """Process tweets of a specific type using the factory."""
-        for tweet_data in tweets_data:
-            # Extract the actual tweet data based on type
-            if tweet_type in ('tweet', 'community'):
-                data = tweet_data.get('tweet', {})
-            elif tweet_type == 'note':
-                note_data = tweet_data.get('noteTweet', {})
-                # For note tweets, handle the different structure
-                data = {
-                    'noteTweetId': note_data.get('noteTweetId'),
-                    'core': note_data.get('core', {}),
-                    'createdAt': note_data.get('createdAt')
-                }
-            else:  # like
-                data = tweet_data.get('like', {})
-                # For likes, ensure we have the right text field
-                if 'fullText' in data:
-                    data['text'] = data['fullText']
-            
-            if data:
-                tweet = TweetFactory.create_tweet(data, tweet_type)
-                if tweet:
+                
+            # Load account info
+            if 'account' in data and data['account']:
+                account_data = data['account'][0].get('account', {})
+                self.username = account_data.get('username')
+                self.metadata['account'] = account_data
+
+            # Load tweets
+            for tweet_data in data.get('tweets', []):
+                if tweet := TweetFactory.create_tweet(tweet_data, 'tweet'):
                     self.tweets.append(tweet)
+
+            # Load note tweets
+            for note_data in data.get('note-tweet', []):
+                if note := TweetFactory.create_tweet(note_data, 'note'):
+                    self.tweets.append(note)
+
+            # Load likes
+            for like_data in data.get('like', []):
+                if like := TweetFactory.create_tweet(like_data, 'like'):
+                    self.tweets.append(like)
+
+        except Exception as e:
+            logger.error(f"Failed to load archive {self.file_path}: {e}")
+            raise
     
     def analyze_urls(self) -> pd.DataFrame:
         """Analyze URLs in the archive using URLAnalyzer."""
-        return self.url_analyzer.analyze_archive(self.archive_path)
+        return self.url_analyzer.analyze_archive(self.file_path)
     
     def get_conversation_threads(self) -> List[ConversationThread]:
         """Extract conversation threads from tweets."""
@@ -105,20 +83,25 @@ class Archive:
         
         return sorted(threads, key=lambda t: t.created_at)
     
-    def export(self, format: str, output_path: Path) -> None:
+    def export(self, format: str, output_path: Path, system_message: str = "You are a helpful assistant.") -> None:
         """Export the archive in various formats."""
-        exporters = {
-            'markdown': MarkdownExporter(),
-            'oai': OpenAIExporter(),
-            'chatml': ChatMLExporter()
+        from .export.markdown import MarkdownExporter
+        from .export.oai import OpenAIExporter
+        from .export.chatml import ChatMLExporter
+        
+        EXPORTERS = {
+            'markdown': MarkdownExporter,
+            'oai': OpenAIExporter,
+            'chatml': ChatMLExporter
         }
         
-        if format not in exporters:
+        if format not in EXPORTERS:
             raise ValueError(f"Unsupported export format: {format}")
         
-        exporter = exporters[format]
-        if format == 'oai':
+        exporter = EXPORTERS[format](system_message=system_message)
+        if format in ('oai', 'chatml'):
             threads = self.get_conversation_threads()
-            exporter.export_conversations(threads, output_path, "You are a helpful assistant")
+            if threads:
+                exporter.export_thread(threads[0], output_path)
         else:
             exporter.export_tweets(self.tweets, output_path)
