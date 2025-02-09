@@ -1,7 +1,7 @@
 from pathlib import Path
 import re
 import logging
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, List
 import requests
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
@@ -10,21 +10,27 @@ import pandas as pd
 from datetime import datetime
 from urllib.parse import urlparse
 import orjson
+from tqdm import tqdm
+import asyncio
 
 from .metadata import URLMetadata
 from .domain import DomainNormalizer
+from .content import ContentAnalyzer
 
 logger = logging.getLogger(__name__)
 
 class URLAnalyzer:
     """Analyzes URLs in Twitter archive data."""
     
-    def __init__(self, archive_dir: Path):
+    def __init__(self, archive_dir: Path, content_cache_dir: Optional[Path] = None):
         self.archive_dir = archive_dir
         self.domain_normalizer = DomainNormalizer()
         self._setup_url_pattern()
         self._setup_http_session()
         self._setup_caches()
+        self.content_analyzer = ContentAnalyzer(
+            content_cache_dir or (archive_dir / '.content_cache')
+        )
         
     def _setup_url_pattern(self):
         """Initialize URL matching pattern."""
@@ -136,6 +142,48 @@ class URLAnalyzer:
             logger.error(f"Error processing {archive_path}: {e}")
             return pd.DataFrame()
 
+    async def analyze_content(self, urls: List[str]) -> Dict[str, 'PageContent']:
+        """Analyze content of URLs concurrently."""
+        return await self.content_analyzer.analyze_urls(urls)
+
+    async def _analyze_archives_async(self):
+        """Async implementation of analyze_archives."""
+        all_urls = set()
+        df_list = []
+        
+        for archive_path in self.archive_dir.glob("*_archive.json"):
+            df = self.analyze_archive(archive_path)
+            if not df.empty:
+                df_list.append(df)
+                all_urls.update(df['url'].unique())
+        
+        if df_list:
+            combined_df = pd.concat(df_list, ignore_index=True)
+            if all_urls:
+                content_results = await self.analyze_content(list(all_urls))
+                # Add content analysis results to DataFrame
+                content_data = []
+                for url, content in content_results.items():
+                    content_data.append({
+                        'url': url,
+                        'page_title': content.title,
+                        'page_description': content.description,
+                        'content_type': content.content_type,
+                        'content_hash': content.content_hash,
+                        'linked_urls': len(content.links),
+                        'image_count': len(content.images),
+                        'fetch_status': 'success' if not content.error else 'error',
+                        'fetch_error': content.error,
+                        'fetch_time': content.fetch_time
+                    })
+                
+                content_df = pd.DataFrame(content_data)
+                combined_df = combined_df.merge(content_df, on='url', how='left')
+            
+            logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
+            return combined_df
+        return pd.DataFrame()
+
     def analyze_archives(self) -> pd.DataFrame:
         """Analyze all archives and return a DataFrame."""
         archives = list(self.archive_dir.glob("*_archive.json"))
@@ -149,6 +197,30 @@ class URLAnalyzer:
         
         if dfs:
             combined_df = pd.concat(dfs, ignore_index=True)
+            
+            # Analyze content for all unique URLs
+            unique_urls = combined_df['url'].unique().tolist()
+            content_results = asyncio.run(self.analyze_content(unique_urls))
+            
+            # Add content analysis results to DataFrame
+            content_data = []
+            for url, content in content_results.items():
+                content_data.append({
+                    'url': url,
+                    'page_title': content.title,
+                    'page_description': content.description,
+                    'content_type': content.content_type,
+                    'content_hash': content.content_hash,
+                    'linked_urls': len(content.links),
+                    'image_count': len(content.images),
+                    'fetch_status': 'success' if not content.error else 'error',
+                    'fetch_error': content.error,
+                    'fetch_time': content.fetch_time
+                })
+            
+            content_df = pd.DataFrame(content_data)
+            combined_df = combined_df.merge(content_df, on='url', how='left')
+            
             logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
             return combined_df
         return pd.DataFrame()

@@ -19,6 +19,7 @@ dependencies = [
     "aiohttp",
     "ratelimit",
     "pyarrow",
+    "aiofiles",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +27,7 @@ dev = [
     "pytest",
     "pytest-cov",
     "pytest-timeout",
+    "pytest-asyncio",
     "flake8",
 ]
 
@@ -57,3 +59,5 @@ markers = [
     "slow: mark test as slow running",
     "timeout: mark test to timeout after X seconds"
 ]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"

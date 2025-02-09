@@ -21,12 +21,12 @@ class URLMetadata:
     def to_dict(self) -> Dict[str, Any]:
         """Convert metadata to dictionary for DataFrame storage."""
         return {
+            'url': self.url,
             'title': self.title,
+            'content_type': self.content_type,
             'fetch_status': self.fetch_status,
             'fetch_error': self.fetch_error,
-            'content_type': self.content_type,
-            'last_fetch_time': self.last_fetch_time,
-            **self.metadata
+            'last_fetch_time': self.last_fetch_time.isoformat() if self.last_fetch_time else None
         }
 
     def mark_skipped(self, reason: str) -> None:

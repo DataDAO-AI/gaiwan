@@ -3,6 +3,7 @@ import argparse
 import logging
 from datetime import datetime, timezone
 import pandas as pd
+from tqdm import tqdm
 from .analyzer import URLAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -113,32 +114,17 @@ def main():
         reporter.print_domain_analysis()
         save_results(df, output_file)
 
-def process_archives(analyzer: URLAnalyzer, output_file: Path, force: bool) -> pd.DataFrame:
-    """Process archives and return combined DataFrame."""
-    existing_df = load_existing_data(output_file) if not force else None
-    archives = list(analyzer.archive_dir.glob("*_archive.json"))
+async def process_archives(analyzer: URLAnalyzer, output_file: Path, force: bool = False):
+    """Process all archives and save results."""
+    existing_df = None if force else load_existing_data(output_file)
     
+    new_df = await analyzer._analyze_archives_async()
     if existing_df is not None:
-        processed_archives = set(existing_df['username'].unique())
-        new_archives = [a for a in archives if a.stem.replace('_archive', '') not in processed_archives]
-        
-        if not new_archives:
-            logger.info("No new archives to process")
-            return existing_df
-            
-        logger.info(f"Found {len(new_archives)} new archives to process")
-        df = analyzer.analyze_archives(new_archives)
-        
-        if df.empty:
-            logger.error("No data found in new archives")
-            return None
-            
-        df = pd.concat([existing_df, df], ignore_index=True)
-        logger.info(f"Merged new data. Total URLs: {len(df)}")
-    else:
-        df = analyzer.analyze_archives(archives)
-        
-    return df
+        new_df = pd.concat([existing_df, new_df], ignore_index=True)
+    
+    if not new_df.empty:
+        save_results(new_df, output_file)
+    return new_df
 
 def load_existing_data(output_file: Path) -> pd.DataFrame:
     """Load existing analysis data if available."""
