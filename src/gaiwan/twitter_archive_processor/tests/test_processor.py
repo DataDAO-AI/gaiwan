@@ -145,7 +145,8 @@ def test_export_all_formats(sample_archives, tmp_path):
     processor.load_archives()
 
     # Add some test tweets to the archives to ensure there's content to export
-    for archive in processor.archives:
+    for i, archive in enumerate(processor.archives):
+        archive.username = f"user{i+1}"
         tweet = StandardTweet(
             id="123",
             text="Test tweet content",

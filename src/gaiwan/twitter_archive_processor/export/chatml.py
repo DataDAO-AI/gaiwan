@@ -65,5 +65,5 @@ class ChatMLExporter(OpenAIExporter):
     
     def _write_messages(self, messages: List[Dict[str, str]], output_path: Path) -> None:
         """Write messages to file in pretty-printed JSON format."""
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:  # Changed back to 'w' mode
             json.dump({"messages": messages}, f, indent=2) 

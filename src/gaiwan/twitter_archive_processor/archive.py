@@ -102,6 +102,10 @@ class Archive:
         if format in ('oai', 'chatml'):
             threads = self.get_conversation_threads()
             if threads:
-                exporter.export_thread(threads[0], output_path)
+                for thread in threads:
+                    exporter.export_thread(thread, output_path)
+            else:
+                # If no threads, export individual tweets
+                exporter.export_tweets(self.tweets, output_path)
         else:
             exporter.export_tweets(self.tweets, output_path)

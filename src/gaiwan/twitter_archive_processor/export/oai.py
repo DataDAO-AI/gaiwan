@@ -47,7 +47,7 @@ class OpenAIExporter(Exporter):
     
     def _write_messages(self, messages: List[Dict[str, str]], output_path: Path) -> None:
         """Write messages to file in JSONL format."""
-        with open(output_path, 'w') as f:
+        with open(output_path, 'a') as f:
             f.write(json.dumps({"messages": messages}) + '\n')
 
     def export_conversations(

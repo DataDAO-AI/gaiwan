@@ -22,15 +22,20 @@ logger = logging.getLogger(__name__)
 class URLAnalyzer:
     """Analyzes URLs in Twitter archive data."""
     
-    def __init__(self, archive_dir: Path, content_cache_dir: Optional[Path] = None):
+    def __init__(self, archive_dir: Optional[Path] = None, content_cache_dir: Optional[Path] = None):
         self.archive_dir = archive_dir
         self.domain_normalizer = DomainNormalizer()
         self._setup_url_pattern()
         self._setup_http_session()
         self._setup_caches()
-        self.content_analyzer = ContentAnalyzer(
-            content_cache_dir or (archive_dir / '.content_cache')
-        )
+        
+        # Default to system temp directory if no paths provided
+        if content_cache_dir is None and archive_dir is None:
+            content_cache_dir = Path.home() / ".cache" / "twitter_archive_processor"
+        elif content_cache_dir is None and archive_dir is not None:
+            content_cache_dir = archive_dir / '.content_cache'
+            
+        self.content_analyzer = ContentAnalyzer(content_cache_dir)
         
     def _setup_url_pattern(self):
         """Initialize URL matching pattern."""

@@ -14,10 +14,19 @@ class MarkdownExporter(Exporter):
     """Export tweets to Markdown format."""
     
     def export_tweets(self, tweets: List[BaseTweet], output_path: Path) -> None:
-        """Export a list of tweets to markdown."""
+        """Export tweets to markdown format."""
+        # Sort tweets by creation date
+        sorted_tweets = sorted(tweets, key=lambda t: t.created_at or datetime.min.replace(tzinfo=timezone.utc))
+        
         with open(output_path, 'w', encoding='utf-8') as f:
-            for tweet in sorted(tweets, key=lambda t: t.created_at or datetime.min.replace(tzinfo=timezone.utc)):
-                self._write_tweet(f, tweet)
+            for tweet in sorted_tweets:
+                f.write(f"# Tweet {tweet.id}\n\n")
+                f.write(f"{tweet.clean_text()}\n\n")
+                if tweet.created_at:
+                    f.write(f"Posted on: {tweet.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                # Add media content
+                for media in tweet.media:
+                    f.write(f"![{media.get('type', 'media')}]({media.get('media_url', '')})\n\n")
     
     def export_thread(self, thread: ConversationThread, output_path: Path) -> None:
         """Export a conversation thread to markdown."""
