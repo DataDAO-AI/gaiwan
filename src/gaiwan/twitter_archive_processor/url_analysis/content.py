@@ -174,7 +174,7 @@ class ContentAnalyzer:
                     if response.status == 200:
                         try:
                             text = await response.text()
-                            content = await self._parse_content(text, content)
+                            content = await self._parse_content(url, text, content.content_type)
                             await self._save_to_cache(cache_path, content)
                             return content
                         except UnicodeDecodeError:
@@ -195,7 +195,7 @@ class ContentAnalyzer:
         await self._save_to_cache(cache_path, content)
         return content
 
-    async def _parse_content(self, content: str, page_content: PageContent) -> PageContent:
+    async def _parse_content(self, url: str, content: str, content_type: str) -> PageContent:
         """Parse HTML content and extract metadata."""
         soup = BeautifulSoup(content, 'html.parser')
         
@@ -220,13 +220,13 @@ class ContentAnalyzer:
         text_content = self._extract_main_content(soup)
         
         return PageContent(
-            url=page_content.url,
+            url=url,
             title=title,
             description=description,
             text_content=text_content,
             links=links,
             images=images,
-            content_type=page_content.content_type
+            content_type=content_type
         )
 
     def _extract_main_content(self, soup: BeautifulSoup) -> str:

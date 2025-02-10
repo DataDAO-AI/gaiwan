@@ -14,6 +14,14 @@ class DomainNormalizer:
             'amzn.to': 'amazon.com',
             'tinyurl.com': 'tinyurl.com',
             'ift.tt': 'ifttt.com',
+            'x.com': 'twitter.com',  # Add Twitter's rebranding
+        }
+        
+        # Known URL shortener domains
+        self.shortener_domains = {
+            't.co', 'bit.ly', 'goo.gl', 'tinyurl.com',
+            'ow.ly', 'buff.ly', 'dlvr.it', 'is.gd',
+            'tiny.cc', 'j.mp', 'ift.tt', 'amzn.to'
         }
     
     def normalize(self, domain: str) -> str:
@@ -24,17 +32,18 @@ class DomainNormalizer:
             if domain.startswith('www.'):
                 domain = domain[4:]
             
-            # Check domain mappings first
-            if domain in self.domain_mappings:
-                return self.domain_mappings[domain]
-            
             # Split domain into parts
             parts = domain.split('.')
             
             # Handle special cases
             if len(parts) >= 2:
+                # Check if the base domain (last two parts) is in mappings
+                base_domain = '.'.join(parts[-2:])
+                if base_domain in self.domain_mappings:
+                    return self.domain_mappings[base_domain]
+                
                 # Common TLDs that should be preserved
-                if parts[-2] + '.' + parts[-1] in {
+                if base_domain in {
                     'co.uk', 'co.jp', 'com.au', 'co.nz', 
                     'org.uk', 'gov.uk', 'ac.uk'
                 }:
@@ -43,7 +52,7 @@ class DomainNormalizer:
                     return domain
                 
                 # For other domains, return last two parts
-                return '.'.join(parts[-2:])
+                return base_domain
             
             return domain
             
