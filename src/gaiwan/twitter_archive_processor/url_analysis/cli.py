@@ -6,6 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 from .analyzer import URLAnalyzer
 import asyncio
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +94,26 @@ def setup_logging(debug: bool):
         debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logging.getLogger().addHandler(debug_handler)
 
+async def process_archives(analyzer: URLAnalyzer, output_file: Path, force: bool = False) -> Optional[pd.DataFrame]:
+    """Process archives and return combined DataFrame."""
+    existing_df = None if force else load_existing_data(output_file)
+    
+    if existing_df is not None:
+        processed_archives = set(existing_df['username'].unique())
+        logger.info(f"Found {len(processed_archives)} processed archives")
+    else:
+        processed_archives = set()
+    
+    new_df = await analyzer._analyze_archives_async()
+    
+    if existing_df is not None and not new_df.empty:
+        new_df = pd.concat([existing_df, new_df], ignore_index=True)
+    
+    if not new_df.empty:
+        save_results(new_df, output_file)
+    return new_df
+
 async def main():
-    """Command-line interface for URL analysis."""
     parser = argparse.ArgumentParser(description="Analyze URLs in Twitter archives")
     parser.add_argument('archive_dir', type=Path, help="Directory containing archives")
     parser.add_argument('--debug', action='store_true', help="Enable debug logging")
@@ -113,19 +132,6 @@ async def main():
         reporter.print_overall_stats()
         reporter.print_fetch_stats()
         reporter.print_domain_analysis()
-        save_results(df, output_file)
-
-async def process_archives(analyzer: URLAnalyzer, output_file: Path, force: bool = False):
-    """Process all archives and save results."""
-    existing_df = None if force else load_existing_data(output_file)
-    
-    new_df = await analyzer._analyze_archives_async()
-    if existing_df is not None:
-        new_df = pd.concat([existing_df, new_df], ignore_index=True)
-    
-    if not new_df.empty:
-        save_results(new_df, output_file)
-    return new_df
 
 def load_existing_data(output_file: Path) -> pd.DataFrame:
     """Load existing analysis data if available."""

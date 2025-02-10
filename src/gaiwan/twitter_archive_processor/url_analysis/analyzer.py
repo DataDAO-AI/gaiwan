@@ -151,34 +151,22 @@ class URLAnalyzer:
         all_urls = set()
         df_list = []
         
-        for archive_path in self.archive_dir.glob("*_archive.json"):
+        archives = list(self.archive_dir.glob("*_archive.json"))
+        print(f"\nFound {len(archives)} archive files to process")
+        
+        for archive_path in tqdm(archives, desc="Processing archives"):
             df = self.analyze_archive(archive_path)
             if not df.empty:
                 df_list.append(df)
                 all_urls.update(df['url'].unique())
-        
+            
         if df_list:
             combined_df = pd.concat(df_list, ignore_index=True)
             if all_urls:
-                content_results = await self.analyze_content(list(all_urls))
-                # Add content analysis results to DataFrame
-                content_data = []
-                for url, content in content_results.items():
-                    content_data.append({
-                        'url': url,
-                        'page_title': content.title,
-                        'page_description': content.description,
-                        'content_type': content.content_type,
-                        'content_hash': content.content_hash,
-                        'linked_urls': len(content.links),
-                        'image_count': len(content.images),
-                        'fetch_status': 'success' if not content.error else 'error',
-                        'fetch_error': content.error,
-                        'fetch_time': content.fetch_time
-                    })
-                
-                content_df = pd.DataFrame(content_data)
-                combined_df = combined_df.merge(content_df, on='url', how='left')
+                print(f"\nAnalyzing {len(all_urls)} unique URLs...")
+                with tqdm(total=len(all_urls), desc="Fetching content") as pbar:
+                    content_results = await self.analyze_content(list(all_urls))
+                    pbar.update(len(content_results))
             
             logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
             return combined_df
