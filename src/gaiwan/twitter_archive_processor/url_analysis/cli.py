@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pandas as pd
 from tqdm import tqdm
 from .analyzer import URLAnalyzer
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ def setup_logging(debug: bool):
         debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logging.getLogger().addHandler(debug_handler)
 
-def main():
+async def main():
     """Command-line interface for URL analysis."""
     parser = argparse.ArgumentParser(description="Analyze URLs in Twitter archives")
     parser.add_argument('archive_dir', type=Path, help="Directory containing archives")
@@ -106,7 +107,7 @@ def main():
     output_file = args.output or Path('urls.parquet')
     analyzer = URLAnalyzer(args.archive_dir)
     
-    df = process_archives(analyzer, output_file, args.force)
+    df = await process_archives(analyzer, output_file, args.force)
     if df is not None:
         reporter = URLAnalysisReporter(df, analyzer)
         reporter.print_overall_stats()
@@ -150,4 +151,4 @@ def save_results(df: pd.DataFrame, output_file: Path):
     logger.info(f"Saved data to {output_file}")
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
