@@ -5,16 +5,13 @@ class DomainNormalizer:
     """Normalizes domain names for consistent analysis."""
     
     def __init__(self):
-        # Common domain mappings (e.g., youtu.be -> youtube.com)
         self.domain_mappings = {
-            'youtu.be': 'youtube.com',
-            't.co': 'twitter.com',
-            'goo.gl': 'google.com',
-            'bit.ly': 'bitly.com',
-            'amzn.to': 'amazon.com',
-            'tinyurl.com': 'tinyurl.com',
-            'ift.tt': 'ifttt.com',
-            'x.com': 'twitter.com',  # Add Twitter's rebranding
+            'twitter.com': ['twitter.com', 'x.com', 'www.twitter.com', 'm.twitter.com'],
+            'youtube.com': ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com'],
+            'wikipedia.org': ['wikipedia.org', 'en.wikipedia.org', 'fr.wikipedia.org', 'de.wikipedia.org'],
+            'github.com': ['github.com', 'raw.githubusercontent.com', 'gist.github.com'],
+            'medium.com': lambda d: d.endswith('.medium.com'),
+            'substack.com': lambda d: d.endswith('.substack.com')
         }
         
         # Known URL shortener domains
@@ -25,40 +22,21 @@ class DomainNormalizer:
         }
     
     def normalize(self, domain: str) -> str:
-        """Normalize a domain name."""
-        try:
-            # Remove www. prefix if present
-            domain = domain.lower().strip()
-            if domain.startswith('www.'):
-                domain = domain[4:]
+        """Normalize a domain to its canonical form."""
+        domain = domain.lower()
+        
+        # Remove www. prefix
+        if domain.startswith('www.'):
+            domain = domain[4:]
             
-            # Split domain into parts
-            parts = domain.split('.')
-            
-            # Handle special cases
-            if len(parts) >= 2:
-                # Check if the base domain (last two parts) is in mappings
-                base_domain = '.'.join(parts[-2:])
-                if base_domain in self.domain_mappings:
-                    return self.domain_mappings[base_domain]
+        # Check direct mappings
+        for canonical, variants in self.domain_mappings.items():
+            if isinstance(variants, list) and domain in variants:
+                return canonical
+            elif callable(variants) and variants(domain):
+                return canonical
                 
-                # Common TLDs that should be preserved
-                if base_domain in {
-                    'co.uk', 'co.jp', 'com.au', 'co.nz', 
-                    'org.uk', 'gov.uk', 'ac.uk'
-                }:
-                    if len(parts) > 2:
-                        return '.'.join(parts[-3:])
-                    return domain
-                
-                # For other domains, return last two parts
-                return base_domain
-            
-            return domain
-            
-        except Exception as e:
-            logger.warning(f"Error normalizing domain '{domain}': {e}")
-            return domain  # Return original domain if normalization fails
+        return domain
 
     def is_shortener(self, domain: str) -> bool:
         """Check if domain is a known URL shortener."""

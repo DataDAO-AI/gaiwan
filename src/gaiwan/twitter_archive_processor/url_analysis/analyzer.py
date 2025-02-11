@@ -185,9 +185,49 @@ class URLAnalyzer:
                 
         return content_results
 
-    def analyze_archives(self) -> Dict[str, PageContent]:
-        """Analyze all URLs in the archives."""
-        return asyncio.run(self._analyze_archives_async())
+    def analyze_archives(self) -> pd.DataFrame:
+        """Analyze all archives and return a DataFrame."""
+        archives = list(self.archive_dir.glob("*_archive.json"))
+        logger.info(f"Found {len(archives)} archives to analyze")
+        
+        # Process each archive and collect DataFrames
+        dfs = []
+        with tqdm(archives, desc="Processing archives") as pbar:
+            for archive in pbar:
+                df = self.analyze_archive(archive)
+                if not df.empty:
+                    dfs.append(df)
+                pbar.set_postfix({'file': archive.name})
+        
+        # Combine all DataFrames
+        if dfs:
+            combined_df = pd.concat(dfs, ignore_index=True)
+            
+            # Resolve shortened URLs with progress bar
+            all_urls = combined_df[combined_df['domain'].isin(self.shortener_domains)]['url'].unique()
+            resolved_urls = {}
+            
+            with tqdm(all_urls, desc="Resolving shortened URLs") as pbar:
+                for url in pbar:
+                    resolved = self.resolve_url(url)
+                    if resolved:
+                        resolved_urls[url] = resolved
+                    pbar.set_postfix({'url': url[:30] + '...' if len(url) > 30 else url})
+            
+            # Update DataFrame with resolved URLs
+            def get_resolved_domain(row):
+                if row['url'] in resolved_urls:
+                    return urlparse(resolved_urls[row['url']]).netloc
+                return row['domain']
+            
+            combined_df['domain'] = combined_df.apply(get_resolved_domain, axis=1)
+            
+            # Normalize domains
+            combined_df['domain'] = combined_df['domain'].apply(self.domain_normalizer.normalize)
+            
+            logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
+            return combined_df
+        return pd.DataFrame()
 
     def get_domain_stats(self) -> pd.DataFrame:
         """Get statistics about domains in the dataset."""
