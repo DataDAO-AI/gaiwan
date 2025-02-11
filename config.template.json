@@ -1,0 +1,12 @@
+{
+  "api_keys": {
+    "youtube": "YOUR_YOUTUBE_API_KEY",
+    "github": "YOUR_GITHUB_API_KEY",
+    "twitter": {
+      "api_key": "YOUR_TWITTER_API_KEY",
+      "api_secret": "YOUR_TWITTER_API_SECRET",
+      "bearer_token": "YOUR_TWITTER_BEARER_TOKEN"
+    },
+    "instagram": "YOUR_INSTAGRAM_ACCESS_TOKEN"
+  }
+} 
