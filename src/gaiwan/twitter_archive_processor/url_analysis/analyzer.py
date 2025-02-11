@@ -12,10 +12,12 @@ from urllib.parse import urlparse
 import orjson
 from tqdm import tqdm
 import asyncio
+import aiohttp
 
 from .metadata import URLMetadata
 from .domain import DomainNormalizer
-from .content import ContentAnalyzer
+from .content import ContentAnalyzer, PageContent
+from ..config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,11 @@ class URLAnalyzer:
             
         self.content_analyzer = ContentAnalyzer(content_cache_dir)
         
+        # Initialize archives list
+        self.archives = []
+        if self.archive_dir:
+            self.archives = list(self.archive_dir.glob("*_archive.json"))
+
     def _setup_url_pattern(self):
         """Initialize URL matching pattern."""
         self.url_pattern = re.compile(
@@ -147,76 +154,74 @@ class URLAnalyzer:
             logger.error(f"Error processing {archive_path}: {e}")
             return pd.DataFrame()
 
-    async def analyze_content(self, urls: List[str]) -> Dict[str, 'PageContent']:
+    async def analyze_content(self, urls: List[str], url_pbar: tqdm) -> Dict[str, 'PageContent']:
         """Analyze content of URLs concurrently."""
-        return await self.content_analyzer.analyze_urls(urls)
+        return await self.content_analyzer.analyze_urls(urls, url_pbar)
 
     async def _analyze_archives_async(self):
         """Async implementation of analyze_archives."""
         all_urls = set()
-        df_list = []
         
-        archives = list(self.archive_dir.glob("*_archive.json"))
-        print(f"\nFound {len(archives)} archive files to process")
+        # First pass: collect all unique URLs
+        for archive in self.archives:
+            urls = self._extract_urls_from_archive(archive)
+            all_urls.update(urls)
+            
+        if not all_urls:
+            logger.warning("No URLs found in archives")
+            return {}
+            
+        total_urls = len(all_urls)
+        print(f"\nAnalyzing {total_urls} unique URLs...")
         
-        for archive_path in tqdm(archives, desc="Processing archives"):
+        async with aiohttp.ClientSession() as session:
+            # Create persistent progress bar
+            with tqdm(total=total_urls, desc="Analyzing URLs") as url_pbar:
+                content_results = await self.content_analyzer.analyze_urls(
+                    list(all_urls), 
+                    session=session,
+                    progress_callback=lambda n: url_pbar.update(n)
+                )
+                
+        return content_results
+
+    def analyze_archives(self) -> Dict[str, PageContent]:
+        """Analyze all URLs in the archives."""
+        return asyncio.run(self._analyze_archives_async())
+
+    def get_domain_stats(self) -> pd.DataFrame:
+        """Get statistics about domains in the dataset."""
+        all_urls = set()
+        for archive_path in self.archive_dir.glob("*_archive.json"):
             df = self.analyze_archive(archive_path)
             if not df.empty:
-                df_list.append(df)
                 all_urls.update(df['url'].unique())
-            
-        if df_list:
-            combined_df = pd.concat(df_list, ignore_index=True)
-            if all_urls:
-                print(f"\nAnalyzing {len(all_urls)} unique URLs...")
-                with tqdm(total=len(all_urls), desc="Fetching content") as pbar:
-                    content_results = await self.analyze_content(list(all_urls))
-                    pbar.update(len(content_results))
-            
-            logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
-            return combined_df
-        return pd.DataFrame()
+        
+        # Parse domains from URLs
+        domains = []
+        for url in all_urls:
+            try:
+                parsed = urlparse(url)
+                domain = parsed.netloc.lower()
+                if domain.startswith('www.'):
+                    domain = domain[4:]
+                domains.append(domain)
+            except Exception as e:
+                logger.error(f"Failed to parse URL {url}: {e}")
+        
+        # Create DataFrame with domain counts
+        domain_df = pd.DataFrame(domains, columns=['domain'])
+        domain_stats = domain_df['domain'].value_counts().reset_index()
+        domain_stats.columns = ['domain', 'count']
+        
+        return domain_stats
 
-    def analyze_archives(self) -> pd.DataFrame:
-        """Analyze all archives and return a DataFrame."""
-        archives = list(self.archive_dir.glob("*_archive.json"))
-        logger.info(f"Found {len(archives)} archives to analyze")
-        
-        dfs = []
-        for archive in tqdm(archives, desc="Analyzing archives"):
-            df = self.analyze_archive(archive)
-            if not df.empty:
-                dfs.append(df)
-        
-        if dfs:
-            combined_df = pd.concat(dfs, ignore_index=True)
-            
-            # Analyze content for all unique URLs
-            unique_urls = combined_df['url'].unique().tolist()
-            content_results = asyncio.run(self.analyze_content(unique_urls))
-            
-            # Add content analysis results to DataFrame
-            content_data = []
-            for url, content in content_results.items():
-                content_data.append({
-                    'url': url,
-                    'page_title': content.title,
-                    'page_description': content.description,
-                    'content_type': content.content_type,
-                    'content_hash': content.content_hash,
-                    'linked_urls': len(content.links),
-                    'image_count': len(content.images),
-                    'fetch_status': 'success' if not content.error else 'error',
-                    'fetch_error': content.error,
-                    'fetch_time': content.fetch_time
-                })
-            
-            content_df = pd.DataFrame(content_data)
-            combined_df = combined_df.merge(content_df, on='url', how='left')
-            
-            logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
-            return combined_df
-        return pd.DataFrame()
+    def _extract_urls_from_archive(self, archive_path: Path) -> Set[str]:
+        """Extract all URLs from a single archive file."""
+        df = self.analyze_archive(archive_path)
+        if df.empty:
+            return set()
+        return set(df['url'].unique())
 
 
     

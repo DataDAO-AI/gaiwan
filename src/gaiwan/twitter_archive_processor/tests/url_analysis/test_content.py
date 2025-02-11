@@ -221,4 +221,72 @@ async def test_concurrent_limits(content_analyzer):
         
         # With max_concurrent=2 and 0.2s delay per request, processing 5 URLs should take at least 0.6s
         assert duration >= 0.6
-        assert len(results) == 5 
+        assert len(results) == 5
+
+@pytest.mark.asyncio
+async def test_cache_behavior(content_analyzer, tmp_path):
+    # Override cache directory for testing
+    content_analyzer.cache_dir = tmp_path
+    urls = [f"https://example{i}.com" for i in range(3)]
+    
+    # Mock response for initial requests
+    class MockResponse:
+        def __init__(self):
+            self.status = 200
+            self.headers = {"content-type": "text/html"}
+            self._text = "<html><title>Test</title></html>"
+        async def text(self):
+            return self._text
+            
+    class MockSession:
+        call_count = 0
+        
+        @asynccontextmanager
+        async def get(self, *args, **kwargs):
+            self.call_count += 1
+            yield MockResponse()
+            
+        async def __aenter__(self):
+            return self
+            
+        async def __aexit__(self, *args):
+            pass
+    
+    session = MockSession()
+    
+    # First run - should make actual requests
+    with patch('aiohttp.ClientSession', return_value=session):
+        results1 = await content_analyzer.analyze_urls(urls)
+        assert session.call_count == 3  # One call per URL
+        
+        # Second run - should use cache
+        results2 = await content_analyzer.analyze_urls(urls)
+        assert session.call_count == 3  # No new calls
+        
+        # Verify results match
+        assert results1.keys() == results2.keys()
+        for url in urls:
+            assert results1[url].title == results2[url].title
+
+@pytest.mark.asyncio
+async def test_cache_expiration(content_analyzer, tmp_path):
+    content_analyzer.cache_dir = tmp_path
+    content_analyzer.cache_ttl = timedelta(seconds=1)
+    url = "https://example.com"
+    
+    # Create and cache initial content
+    content = PageContent(url=url, title="Test")
+    cache_path = content_analyzer._get_cache_path(url)
+    await content_analyzer._save_to_cache(cache_path, content)
+    
+    # Immediate load should work
+    cached = await content_analyzer._load_from_cache(cache_path)
+    assert cached is not None
+    assert cached.title == "Test"
+    
+    # Wait for expiration
+    await asyncio.sleep(1.1)
+    
+    # Should return None after expiration
+    expired = await content_analyzer._load_from_cache(cache_path)
+    assert expired is None 

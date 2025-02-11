@@ -125,6 +125,9 @@ async def main():
     
     output_file = args.output or Path('urls.parquet')
     analyzer = URLAnalyzer(args.archive_dir)
+    domain_stats = analyzer.get_domain_stats()
+    print("\nTop 10 domains:")
+    print(domain_stats.head(10))
     
     df = await process_archives(analyzer, output_file, args.force)
     if df is not None:

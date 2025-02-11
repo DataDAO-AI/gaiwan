@@ -14,6 +14,10 @@ import re
 from tqdm import tqdm
 import ssl
 import gc
+from .apis.youtube import YouTubeAPI
+from ..config import Config
+from .apis.github import GitHubAPI
+from .models import PageContent
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +59,14 @@ class PageContent:
 class ContentAnalyzer:
     """Asynchronous web content analyzer with caching."""
     
-    def __init__(self, cache_dir: Optional[Path] = None):
-        self.cache_dir = cache_dir or Path.home() / ".cache" / "twitter_archive_processor"
+    def __init__(self, cache_dir: Optional[Path] = None, config: Optional[Config] = None):
+        # Make cache directory absolute and ensure it exists
+        self.cache_dir = Path(cache_dir or Path.home() / ".cache" / "twitter_archive_processor").resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.max_concurrent = 5
-        self.batch_size = 1000  # Process URLs in batches
+        logger.info(f"Using cache directory: {self.cache_dir}")
+        
+        self.max_concurrent = 3
+        self.batch_size = 100
         self.cache_ttl = timedelta(days=30)
         
         # Longer timeout for rate-limited sites
@@ -94,56 +101,60 @@ class ContentAnalyzer:
             'application/octet-stream', 'application/x-binary'
         }
 
-    async def analyze_urls(self, urls: List[str]) -> Dict[str, PageContent]:
-        """Analyze multiple URLs concurrently in batches."""
-        all_results = {}
-        total_urls = len(urls)
-        
-        with tqdm(total=total_urls, desc="Analyzing URLs") as pbar:
-            for i in range(0, total_urls, self.batch_size):
-                batch_urls = urls[i:i + self.batch_size]
-                results = await self._analyze_url_batch(batch_urls, pbar)
-                all_results.update(results)
-                
-                # Force garbage collection after each batch
-                gc.collect()
-        
-        return all_results
-    
-    async def _analyze_url_batch(self, urls: List[str], pbar: tqdm) -> Dict[str, PageContent]:
-        """Analyze a batch of URLs concurrently."""
+        # Load config and initialize APIs
+        self.config = config or Config()
+        # self.youtube_api = YouTubeAPI(api_key=self.config.get_api_key('youtube')) if self.config.get_api_key('youtube') else None
+        # self.github_api = GitHubAPI(api_key=self.config.get_api_key('github')) if self.config.get_api_key('github') else None
+
+    async def analyze_urls(self, urls: List[str], session: aiohttp.ClientSession, progress_callback=None) -> Dict[str, PageContent]:
+        """Analyze multiple URLs concurrently with optional progress callback."""
         results = {}
-        connector = aiohttp.TCPConnector(ssl=self.ssl_context)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            tasks = []
-            sem = asyncio.Semaphore(self.max_concurrent)
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        
+        async def process_url_with_progress(url: str):
+            async with semaphore:
+                result = await self.analyze_url(session, url)
+                results[url] = result
+                if progress_callback:
+                    progress_callback(1)
+                return result
+
+        # Process URLs in batches
+        for i in range(0, len(urls), self.batch_size):
+            batch = urls[i:i + self.batch_size]
+            tasks = [process_url_with_progress(url) for url in batch]
+            await asyncio.gather(*tasks)
             
-            async def analyze_with_semaphore(url: str):
-                async with sem:
-                    result = await self.analyze_url(session, url)
-                    pbar.update(1)
-                    if result.error:
-                        pbar.write(f"Error analyzing {url}: {result.error}")
-                    return url, result
-            
-            for url in urls:
-                tasks.append(analyze_with_semaphore(url))
-            
-            for result in await asyncio.gather(*tasks, return_exceptions=True):
-                if isinstance(result, tuple):  # Successful result
-                    results[result[0]] = result[1]
-                else:  # Exception occurred
-                    logger.error(f"Task failed with error: {result}")
+            # Force garbage collection after each batch
+            gc.collect()
         
         return results
 
     async def analyze_url(self, session: aiohttp.ClientSession, url: str) -> PageContent:
-        """Analyze a single URL with better error handling and rate limiting."""
+        """Analyze a single URL, using API if available."""
         cache_path = self._get_cache_path(url)
+        
+        # Check cache first
         cached_content = await self._load_from_cache(cache_path)
         if cached_content:
+            logger.debug(f"Cache hit for {url}")
             return cached_content
-
+            
+        # Try API handlers
+        # if self.youtube_api and ('youtube.com' in url or 'youtu.be' in url):
+        #     content = await self.youtube_api.process_url(url)
+        #     if content:
+        #         await self._save_to_cache(cache_path, content)
+        #         return content
+                
+        # if self.github_api and 'github.com' in url:
+        #     content = await self.github_api.process_url(url)
+        #     if content:
+        #         await self._save_to_cache(cache_path, content)
+        #         return content
+        
+        # Fall back to regular web scraping
+        logger.debug(f"Cache miss for {url}")
         content = PageContent(url=url)
         for attempt in range(3):
             try:
@@ -244,42 +255,59 @@ class ContentAnalyzer:
         return text
 
     def _get_cache_path(self, url: str) -> Path:
-        """Generate cache file path for URL."""
-        url_hash = hashlib.sha256(url.encode()).hexdigest()
-        return self.cache_dir / f"{url_hash}.json"
+        """Generate a safe cache file path for a URL."""
+        # Create a safe filename from the URL
+        safe_name = hashlib.sha256(url.encode()).hexdigest()
+        return self.cache_dir / f"{safe_name}.json"
 
     async def _load_from_cache(self, cache_path: Path) -> Optional[PageContent]:
-        """Load cached content if available and not expired."""
+        """Load content from cache if available and not expired."""
         try:
             if not cache_path.exists():
                 return None
                 
-            with open(cache_path) as f:
-                data = json.load(f)
+            async with aiofiles.open(cache_path, 'r') as f:
+                cache_data = json.loads(await f.read())
                 
-            content = PageContent(url=data['url'])
-            content.title = data.get('title')
-            content.description = data.get('description')
-            content.links = set(data.get('links', []))
-            content.images = set(data.get('images', []))
-            content.fetch_time = datetime.fromisoformat(data['fetch_time'])
-            
-            # Check if cache is expired
-            if datetime.now(timezone.utc) - content.fetch_time > self.cache_ttl:
+            # Check cache expiration
+            fetch_time = datetime.fromisoformat(cache_data['fetch_time'])
+            if datetime.now(timezone.utc) - fetch_time > self.cache_ttl:
+                logger.debug(f"Cache expired for {cache_data['url']}")
                 return None
                 
+            content = PageContent(
+                url=cache_data['url'],
+                title=cache_data.get('title'),
+                description=cache_data.get('description'),
+                content_type=cache_data.get('content_type'),
+                status_code=cache_data.get('status_code'),
+                error=cache_data.get('error')
+            )
+            logger.debug(f"Loaded from cache: {content.url}")
             return content
+            
         except Exception as e:
-            logger.error(f"Error loading cache for {cache_path}: {e}")
+            logger.error(f"Failed to load cache from {cache_path}: {e}")
             return None
 
-    async def _save_to_cache(self, cache_path: Path, content: PageContent):
-        """Save content to cache."""
+    async def _save_to_cache(self, cache_path: Path, content: PageContent) -> None:
+        """Save content to cache file."""
         try:
-            with open(cache_path, 'w') as f:
-                json.dump(content.to_dict(), f)
+            cache_data = {
+                'url': content.url,
+                'title': content.title,
+                'description': content.description,
+                'content_type': content.content_type,
+                'status_code': content.status_code,
+                'error': content.error,
+                'fetch_time': datetime.now(timezone.utc).isoformat()
+            }
+            
+            async with aiofiles.open(cache_path, 'w') as f:
+                await f.write(json.dumps(cache_data))
+            logger.debug(f"Cached content for {content.url}")
         except Exception as e:
-            logger.error(f"Error saving cache for {cache_path}: {e}")
+            logger.error(f"Failed to cache content for {content.url}: {e}")
 
     def _is_valid_url(self, url: str) -> bool:
         """Check if URL is valid and absolute."""
