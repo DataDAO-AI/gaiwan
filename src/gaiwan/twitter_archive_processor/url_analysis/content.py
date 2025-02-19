@@ -66,7 +66,7 @@ class ContentAnalyzer:
         logger.info(f"Using cache directory: {self.cache_dir}")
         
         self.max_concurrent = 3
-        self.batch_size = 100
+        self.batch_size = 50  # Smaller batch size for content analysis
         self.cache_ttl = timedelta(days=30)
         
         # Longer timeout for rate-limited sites
@@ -111,23 +111,32 @@ class ContentAnalyzer:
         results = {}
         semaphore = asyncio.Semaphore(self.max_concurrent)
         
-        async def process_url_with_progress(url: str):
+        # Process URLs in smaller sub-batches for better memory management
+        for i in range(0, len(urls), self.batch_size):
+            batch = urls[i:i + self.batch_size]
+            batch_results = await self._process_batch(batch, session, semaphore, progress_callback)
+            results.update(batch_results)
+            
+            # Force garbage collection after each sub-batch
+            gc.collect()
+        
+        return results
+        
+    async def _process_batch(self, urls: List[str], session: aiohttp.ClientSession, 
+                           semaphore: asyncio.Semaphore, progress_callback) -> Dict[str, PageContent]:
+        """Process a batch of URLs concurrently."""
+        results = {}
+        
+        async def process_url_with_semaphore(url: str):
             async with semaphore:
                 result = await self.analyze_url(session, url)
                 results[url] = result
                 if progress_callback:
                     progress_callback(1)
                 return result
-
-        # Process URLs in batches
-        for i in range(0, len(urls), self.batch_size):
-            batch = urls[i:i + self.batch_size]
-            tasks = [process_url_with_progress(url) for url in batch]
-            await asyncio.gather(*tasks)
-            
-            # Force garbage collection after each batch
-            gc.collect()
-        
+                
+        tasks = [process_url_with_semaphore(url) for url in urls]
+        await asyncio.gather(*tasks)
         return results
 
     async def analyze_url(self, session: aiohttp.ClientSession, url: str) -> PageContent:

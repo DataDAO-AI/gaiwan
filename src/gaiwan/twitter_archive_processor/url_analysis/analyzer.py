@@ -13,6 +13,7 @@ import orjson
 from tqdm import tqdm
 import asyncio
 import aiohttp
+import gc
 
 from .metadata import URLMetadata
 from .domain import DomainNormalizer
@@ -43,6 +44,8 @@ class URLAnalyzer:
         self.archives = []
         if self.archive_dir:
             self.archives = list(self.archive_dir.glob("*_archive.json"))
+        
+        self.batch_size = 100  # Number of URLs to process at once
 
     def _setup_url_pattern(self):
         """Initialize URL matching pattern."""
@@ -185,49 +188,105 @@ class URLAnalyzer:
                 
         return content_results
 
-    def analyze_archives(self) -> pd.DataFrame:
+    async def analyze_archives(self) -> pd.DataFrame:
         """Analyze all archives and return a DataFrame."""
+        all_dfs = []
         archives = list(self.archive_dir.glob("*_archive.json"))
         logger.info(f"Found {len(archives)} archives to analyze")
         
-        # Process each archive and collect DataFrames
-        dfs = []
         with tqdm(archives, desc="Processing archives") as pbar:
             for archive in pbar:
-                df = self.analyze_archive(archive)
+                # Process each archive's URLs in batches
+                df = await self._process_archive_in_batches(archive)
                 if not df.empty:
-                    dfs.append(df)
+                    all_dfs.append(df)
                 pbar.set_postfix({'file': archive.name})
+                
+                # Force garbage collection after each archive
+                gc.collect()
         
         # Combine all DataFrames
-        if dfs:
-            combined_df = pd.concat(dfs, ignore_index=True)
-            
-            # Resolve shortened URLs with progress bar
-            all_urls = combined_df[combined_df['domain'].isin(self.shortener_domains)]['url'].unique()
-            resolved_urls = {}
-            
-            with tqdm(all_urls, desc="Resolving shortened URLs") as pbar:
-                for url in pbar:
-                    resolved = self.resolve_url(url)
-                    if resolved:
-                        resolved_urls[url] = resolved
-                    pbar.set_postfix({'url': url[:30] + '...' if len(url) > 30 else url})
-            
-            # Update DataFrame with resolved URLs
-            def get_resolved_domain(row):
-                if row['url'] in resolved_urls:
-                    return urlparse(resolved_urls[row['url']]).netloc
-                return row['domain']
-            
-            combined_df['domain'] = combined_df.apply(get_resolved_domain, axis=1)
-            
-            # Normalize domains
-            combined_df['domain'] = combined_df['domain'].apply(self.domain_normalizer.normalize)
-            
+        if all_dfs:
+            combined_df = pd.concat(all_dfs, ignore_index=True)
             logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
             return combined_df
         return pd.DataFrame()
+
+    async def _process_archive_in_batches(self, archive_path: Path) -> pd.DataFrame:
+        """Process a single archive file in batches."""
+        try:
+            with open(archive_path, 'rb') as f:
+                data = orjson.loads(f.read())
+            
+            url_data = []
+            username = archive_path.stem.replace('_archive', '')
+            
+            # Extract all tweets first
+            tweets = data.get('tweets', [])
+            total_tweets = len(tweets)
+            
+            for i in range(0, total_tweets, self.batch_size):
+                batch_tweets = tweets[i:i + self.batch_size]
+                batch_urls = set()
+                batch_url_data = []
+                
+                # Extract URLs from batch
+                for tweet_data in batch_tweets:
+                    if 'tweet' in tweet_data:
+                        tweet = tweet_data['tweet']
+                        tweet_id = tweet.get('id_str')
+                        created_at = datetime.strptime(
+                            tweet.get('created_at', ''), 
+                            "%a %b %d %H:%M:%S %z %Y"
+                        ) if tweet.get('created_at') else None
+                        
+                        urls = self.extract_urls_from_tweet(tweet)
+                        for url in urls:
+                            parsed = urlparse(url)
+                            batch_urls.add(url)
+                            batch_url_data.append({
+                                'username': username,
+                                'tweet_id': tweet_id,
+                                'tweet_created_at': created_at,
+                                'url': url,
+                                'domain': self.domain_normalizer.normalize(parsed.netloc),
+                                'raw_domain': parsed.netloc,
+                                'protocol': parsed.scheme,
+                                'path': parsed.path,
+                                'query': parsed.query,
+                                'fragment': parsed.fragment
+                            })
+                
+                # Process content for batch URLs
+                if batch_urls:
+                    async with aiohttp.ClientSession() as session:
+                        content_results = await self.content_analyzer.analyze_urls(
+                            list(batch_urls),
+                            session=session
+                        )
+                        
+                        # Update URL data with content results
+                        for url_entry in batch_url_data:
+                            if url_entry['url'] in content_results:
+                                content = content_results[url_entry['url']]
+                                url_entry.update({
+                                    'title': content.title,
+                                    'description': content.description,
+                                    'content_type': content.content_type,
+                                    'status_code': content.status_code,
+                                    'error': content.error
+                                })
+                
+                url_data.extend(batch_url_data)
+                
+                # Force garbage collection after each batch
+                gc.collect()
+            
+            return pd.DataFrame(url_data)
+            
+        except Exception as e:
+            logger.error(f"Error processing {archive_path}: {e}")
+            return pd.DataFrame()
 
     def get_domain_stats(self) -> pd.DataFrame:
         """Get statistics about domains in the dataset."""
