@@ -1,25 +1,20 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaiwan"
-version = "0.1"
-description = "Twitter archive tools"
-requires-python = ">=3.7"
+version = "0.1.0"
+description = "Twitter Archive Processing Framework"
+requires-python = ">=3.8"
 dependencies = [
-    "requests",
     "pandas",
+    "requests",
+    "aiohttp",
+    "beautifulsoup4",
     "tqdm",
     "orjson",
-    "pytest",
-    "urllib3",
-    "jsonschema",
-    "beautifulsoup4",
-    "aiohttp",
-    "ratelimit",
-    "pyarrow",
-    "aiofiles",
+    "aiofiles"
 ]
 
 [project.optional-dependencies]
@@ -30,6 +25,8 @@ dev = [
     "pytest-asyncio",
     "flake8",
 ]
+
+youtube = ["google-api-python-client"]
 
 [tool.pylint.messages_control]
 disable = [
@@ -48,7 +45,8 @@ multi_line_output = 3
 [tool.pytest]
 testpaths = ["tests"]
 python_files = "test_*.py"
-addopts = "-v --cov=gaiwan --cov-report=term-missing"
+addopts = "-ra -q"
+pythonpath = ["src"]
 
 [tool.coverage.run]
 source = ["gaiwan"]
@@ -61,3 +59,7 @@ markers = [
 ]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.setuptools]
+packages = ["gaiwan"]
+package-dir = {"" = "src"}

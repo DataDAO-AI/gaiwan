@@ -2,9 +2,12 @@ import pytest
 from pathlib import Path
 import json
 from datetime import datetime, timezone
-from ..tweets.types import StandardTweet
-from ..metadata import TweetMetadata
-from ..conversation import ConversationThread
+
+# Convert to absolute imports
+from gaiwan.twitter_archive_processor.tweets.types import StandardTweet
+from gaiwan.twitter_archive_processor.core.metadata import TweetMetadata
+from gaiwan.twitter_archive_processor.core.conversation import ConversationThread
+from gaiwan.twitter_archive_processor.url_analysis.analyzer import URLAnalyzer
 
 @pytest.fixture
 def sample_archive_data():
@@ -92,4 +95,14 @@ def sample_thread(sample_tweet):
     
     thread = ConversationThread(root_tweet=sample_tweet)
     thread.add_reply(reply)
-    return thread 
+    return thread
+
+@pytest.fixture
+def temp_archive_dir(tmp_path):
+    archive_dir = tmp_path / "archives"
+    archive_dir.mkdir()
+    return archive_dir
+
+@pytest.fixture
+def analyzer(temp_archive_dir):
+    return URLAnalyzer(archive_dir=temp_archive_dir) 

@@ -3,14 +3,14 @@ from setuptools import setup, find_packages
 setup(
     name="gaiwan",
     version="0.1",
-    packages=find_packages(where="src"),
     package_dir={"": "src"},
+    packages=find_packages(where="src"),
     install_requires=[
-        "requests",
         "pandas",
+        "aiohttp",
+        "beautifulsoup4",
         "tqdm",
         "orjson",
-        "pytest",  # for running tests
-        "urllib3",  # required by requests but good to specify
     ],
+    python_requires=">=3.6",
 ) 

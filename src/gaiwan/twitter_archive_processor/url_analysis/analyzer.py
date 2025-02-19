@@ -43,7 +43,9 @@ class URLAnalyzer:
         # Initialize archives list
         self.archives = []
         if self.archive_dir:
-            self.archives = list(self.archive_dir.glob("*_archive.json"))
+            # Update the glob pattern to match test files
+            self.archives = list(self.archive_dir.glob("*.json"))
+            logger.debug(f"Found {len(self.archives)} archive files in {self.archive_dir}")
         
         self.batch_size = 100  # Number of URLs to process at once
 
@@ -157,11 +159,12 @@ class URLAnalyzer:
             logger.error(f"Error processing {archive_path}: {e}")
             return pd.DataFrame()
 
-    async def analyze_content(self, urls: List[str], url_pbar: tqdm) -> Dict[str, 'PageContent']:
+    async def analyze_content(self, urls: List[str], url_pbar: Optional[tqdm] = None) -> Dict[str, 'PageContent']:
         """Analyze content of URLs concurrently."""
-        return await self.content_analyzer.analyze_urls(urls, url_pbar)
+        progress_callback = lambda n: url_pbar.update(n) if url_pbar else None
+        return await self.content_analyzer.analyze_urls(urls, progress_callback=progress_callback)
 
-    async def _analyze_archives_async(self):
+    async def _analyze_archives_async(self) -> pd.DataFrame:
         """Async implementation of analyze_archives."""
         all_urls = set()
         
@@ -172,11 +175,12 @@ class URLAnalyzer:
             
         if not all_urls:
             logger.warning("No URLs found in archives")
-            return {}
-            
+            return self._create_empty_dataframe()
+        
         total_urls = len(all_urls)
         print(f"\nAnalyzing {total_urls} unique URLs...")
         
+        url_data = []
         async with aiohttp.ClientSession() as session:
             # Create persistent progress bar
             with tqdm(total=total_urls, desc="Analyzing URLs") as url_pbar:
@@ -186,31 +190,54 @@ class URLAnalyzer:
                     progress_callback=lambda n: url_pbar.update(n)
                 )
                 
-        return content_results
+                # Convert content results to DataFrame rows
+                for url, content in content_results.items():
+                    parsed = urlparse(url)
+                    url_data.append({
+                        'url': url,
+                        'domain': self.domain_normalizer.normalize(parsed.netloc),
+                        'raw_domain': parsed.netloc,
+                        'protocol': parsed.scheme,
+                        'path': parsed.path,
+                        'query': parsed.query,
+                        'fragment': parsed.fragment,
+                        'title': content.title,
+                        'description': content.description,
+                        'content_type': content.content_type,
+                        'status_code': content.status_code,
+                        'error': content.error
+                    })
+        
+        return pd.DataFrame(url_data) if url_data else self._create_empty_dataframe()
 
-    async def analyze_archives(self) -> pd.DataFrame:
-        """Analyze all archives and return a DataFrame."""
-        all_dfs = []
-        archives = list(self.archive_dir.glob("*_archive.json"))
-        logger.info(f"Found {len(archives)} archives to analyze")
+    def analyze_archives(self) -> pd.DataFrame:
+        """Analyze URLs in all archives."""
+        if not self.archives:
+            return self._create_empty_dataframe()
         
-        with tqdm(archives, desc="Processing archives") as pbar:
-            for archive in pbar:
-                # Process each archive's URLs in batches
-                df = await self._process_archive_in_batches(archive)
-                if not df.empty:
-                    all_dfs.append(df)
-                pbar.set_postfix({'file': archive.name})
-                
-                # Force garbage collection after each archive
-                gc.collect()
+        url_data = []
+        for archive in self.archives:
+            try:
+                df = self.analyze_archive(archive)
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    url_data.append(df)
+            except Exception as e:
+                logger.error(f"Error processing archive {archive}: {e}")
+                continue
         
-        # Combine all DataFrames
-        if all_dfs:
-            combined_df = pd.concat(all_dfs, ignore_index=True)
-            logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
-            return combined_df
-        return pd.DataFrame()
+        if not url_data:
+            return self._create_empty_dataframe()
+        
+        return pd.concat(url_data, ignore_index=True)
+
+    def _create_empty_dataframe(self) -> pd.DataFrame:
+        """Create empty DataFrame with standard columns."""
+        return pd.DataFrame(columns=[
+            'username', 'tweet_id', 'tweet_created_at', 'url',
+            'domain', 'raw_domain', 'protocol', 'path',
+            'query', 'fragment', 'title', 'description',
+            'content_type', 'status_code', 'error'
+        ])
 
     async def _process_archive_in_batches(self, archive_path: Path) -> pd.DataFrame:
         """Process a single archive file in batches."""
@@ -322,10 +349,32 @@ class URLAnalyzer:
 
     def _extract_urls_from_archive(self, archive_path: Path) -> Set[str]:
         """Extract all URLs from a single archive file."""
-        df = self.analyze_archive(archive_path)
-        if df.empty:
+        try:
+            with open(archive_path, 'rb') as f:
+                data = orjson.loads(f.read())
+            
+            urls = set()
+            if 'tweets' in data:
+                for tweet_data in data['tweets']:
+                    if 'tweet' in tweet_data:
+                        tweet = tweet_data['tweet']
+                        # Extract from tweet text
+                        if 'full_text' in tweet:
+                            text_urls = self.url_pattern.findall(tweet['full_text'])
+                            urls.update(text_urls)
+                        
+                        # Extract from entities
+                        if 'entities' in tweet and 'urls' in tweet['entities']:
+                            for url_entity in tweet['entities']['urls']:
+                                if 'expanded_url' in url_entity:
+                                    urls.add(url_entity['expanded_url'])
+                                elif 'url' in url_entity:
+                                    urls.add(url_entity['url'])
+            
+            return urls
+        except Exception as e:
+            logger.error(f"Error extracting URLs from {archive_path}: {e}")
             return set()
-        return set(df['url'].unique())
 
 
     

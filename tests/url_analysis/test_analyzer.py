@@ -77,23 +77,44 @@ def test_analyze_archive(analyzer, temp_archive_dir, sample_tweet_data):
 
 @pytest.mark.asyncio
 async def test_analyze_archives(analyzer, temp_archive_dir, sample_tweet_data):
-    create_archive_file(temp_archive_dir, "user1", [sample_tweet_data])
-    create_archive_file(temp_archive_dir, "user2", [sample_tweet_data])
+    # Create archive files with sample data
+    archive1 = create_archive_file(temp_archive_dir, "user1", [sample_tweet_data])
+    archive2 = create_archive_file(temp_archive_dir, "user2", [sample_tweet_data])
     
-    mock_content = PageContent(
-        url="https://example.com",
-        title="Test Page",
-        content_type="text/html"
-    )
+    # Reinitialize analyzer to pick up the new files
+    analyzer = URLAnalyzer(archive_dir=temp_archive_dir)
+    
+    # Verify archives were found
+    assert len(analyzer.archives) == 2
+    assert archive1 in analyzer.archives
+    assert archive2 in analyzer.archives
+    
+    # Create mock content for each URL in sample_tweet_data
+    mock_contents = {
+        "https://example.com": PageContent(
+            url="https://example.com",
+            title="Test Page 1",
+            content_type="text/html"
+        ),
+        "https://longurl.com/page": PageContent(
+            url="https://longurl.com/page",
+            title="Test Page 2",
+            content_type="text/html"
+        )
+    }
     
     async def mock_analyze(*args, **kwargs):
-        return {"https://example.com": mock_content}
+        return mock_contents
     
     with patch('gaiwan.twitter_archive_processor.url_analysis.content.ContentAnalyzer.analyze_urls', 
                new=mock_analyze):
         df = await analyzer._analyze_archives_async()
+        assert isinstance(df, pd.DataFrame)
         assert not df.empty
-        assert "user1" in df["username"].values
+        assert len(df) == 2  # Should have both URLs
+        assert set(df['url'].values) == {"https://example.com", "https://longurl.com/page"}
+        assert all(df['content_type'] == "text/html")
+        assert set(df['title'].values) == {"Test Page 1", "Test Page 2"}
 
 def test_url_resolution(analyzer):
     with patch('requests.Session.head') as mock_head:
@@ -122,4 +143,24 @@ def test_error_handling(analyzer, temp_archive_dir):
     with patch('requests.Session.head') as mock_head:
         mock_head.side_effect = Exception("Network error")
         resolved = analyzer.resolve_url("https://t.co/error")
-        assert resolved is None 
+        assert resolved is None
+
+@pytest.mark.asyncio
+async def test_analyze_archives_empty_result(temp_archive_dir):
+    """Test analyze_archives when no valid data is found."""
+    analyzer = URLAnalyzer(archive_dir=temp_archive_dir)
+    
+    # Create an empty archive file
+    archive_path = temp_archive_dir / "test_archive.json"
+    with open(archive_path, 'w') as f:
+        f.write('{"tweets": []}')
+    
+    result = analyzer.analyze_archives()
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
+    assert list(result.columns) == [
+        'username', 'tweet_id', 'tweet_created_at', 'url',
+        'domain', 'raw_domain', 'protocol', 'path',
+        'query', 'fragment', 'title', 'description',
+        'content_type', 'status_code', 'error'
+    ] 
