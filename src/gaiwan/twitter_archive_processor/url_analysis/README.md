@@ -182,46 +182,103 @@ skip_content_types = {
 }
 ```
 
-## Maintaining This README
+## URL Processing Log
 
-This README should be updated when:
-1. New analyzers are added
-2. Output formats change
-3. Configuration options are modified
-4. API methods are changed
+The package now maintains a persistent log of processed URLs to avoid redundant processing across multiple runs:
 
-Update checklist:
-- [ ] Class hierarchy diagram
-- [ ] Data model documentation
-- [ ] Output format examples
-- [ ] Configuration options
-- [ ] API examples
+```python
+analyzer = URLAnalyzer(
+    archive_dir=Path("path/to/archives"),
+    content_cache_dir=Path("path/to/cache")
+)
+
+# URLs are automatically logged when processed
+await analyzer.analyze_archives()
+```
+
+### Log Format
+
+The URL processing log is stored in CSV format:
+```csv
+url,timestamp,status
+https://example.com,2024-01-20T12:34:56+00:00,success
+https://failed.com,2024-01-20T12:34:57+00:00,failed
+```
+
+### Features
+
+- Persistent tracking of processed URLs
+- Automatic cache expiration based on TTL
+- Separate tracking of successful and failed URLs
+- Efficient batch processing with memory management
+- CSV format for easy inspection and analysis
+
+### Configuration
+
+```python
+content_analyzer = ContentAnalyzer(
+    cache_dir=Path("path/to/cache"),
+    config=Config(
+        cache_ttl=timedelta(days=30)  # How long to consider URLs as processed
+    )
+)
+```
+
+### Memory Management
+
+The analyzer now processes URLs in batches with automatic memory cleanup:
+
+```python
+# Configure batch size
+analyzer.batch_size = 100  # URLs per batch
+
+# Analyze archives with automatic batching
+df = await analyzer.analyze_archives()
+```
+
+## Performance Improvements
+
+Recent updates include:
+- Batched URL processing
+- Persistent URL processing log
+- Memory optimization
+- Concurrent processing with rate limiting
+- Automatic garbage collection
 
 ## Error Handling
 
-The package handles:
+The system handles various scenarios:
 - Network timeouts and errors
-- Rate limiting
+- Rate limiting responses
 - Invalid URLs
 - Binary content detection
 - Cache read/write errors
 - Memory management
 - Concurrent request limits
+- URL processing status tracking
 
 ## Testing
 
-Run tests with:
+New test cases cover:
+- URL processing log functionality
+- Cache TTL behavior
+- Memory management
+- Batch processing
+- Error scenarios
+
+Run the new tests with:
 ```bash
-pytest tests/url_analysis/
+pytest tests/url_analysis/test_content.py -k "test_url_processing"
 ```
 
-Test coverage includes:
-- URL extraction
-- Content analysis
-- Domain normalization
-- Rate limiting
-- Caching
-- Error handling
+## Maintaining This README
+
+Update checklist:
+- [x] URL processing log documentation
+- [x] Memory management features
+- [x] Configuration options
+- [x] Test coverage
+- [x] Performance improvements
 
 ## Dependencies
 

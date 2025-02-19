@@ -289,4 +289,60 @@ async def test_cache_expiration(content_analyzer, tmp_path):
     
     # Should return None after expiration
     expired = await content_analyzer._load_from_cache(cache_path)
-    assert expired is None 
+    assert expired is None
+
+# Add new test cases for URL processing log
+@pytest.mark.asyncio
+async def test_url_processing_log(content_analyzer, tmp_path):
+    """Test URL processing log functionality."""
+    url = "https://example.com"
+    
+    # Test log initialization
+    assert content_analyzer.url_log_path.exists()
+    assert content_analyzer.processed_urls == {}
+    
+    # Test logging successful URL
+    await content_analyzer._log_processed_url(url, 'success')
+    assert url in content_analyzer.processed_urls
+    assert isinstance(content_analyzer.processed_urls[url], datetime)
+    
+    # Test logging failed URL
+    failed_url = "https://failed.com"
+    await content_analyzer._log_processed_url(failed_url, 'failed')
+    assert failed_url not in content_analyzer.processed_urls  # Failed URLs aren't cached
+    
+    # Test log persistence
+    # Create new analyzer instance to test log loading
+    new_analyzer = ContentAnalyzer(cache_dir=tmp_path)
+    assert url in new_analyzer.processed_urls
+    assert failed_url not in new_analyzer.processed_urls
+
+@pytest.mark.asyncio
+async def test_url_processing_cache_ttl(content_analyzer, tmp_path):
+    """Test URL processing respects cache TTL."""
+    url = "https://example.com"
+    
+    # Set short TTL for testing
+    content_analyzer.cache_ttl = timedelta(seconds=1)
+    
+    # Log URL as processed
+    await content_analyzer._log_processed_url(url, 'success')
+    assert url in content_analyzer.processed_urls
+    
+    # Wait for TTL to expire
+    await asyncio.sleep(1.1)
+    
+    # Create mock session for testing
+    class MockSession:
+        call_count = 0
+        
+        @asynccontextmanager
+        async def get(self, *args, **kwargs):
+            self.call_count += 1
+            yield create_mock_response("<html><title>Test</title></html>")
+    
+    session = MockSession()
+    
+    # Should reprocess URL after TTL expiration
+    await content_analyzer.analyze_url(session, url)
+    assert session.call_count == 1  # URL should be reprocessed 
