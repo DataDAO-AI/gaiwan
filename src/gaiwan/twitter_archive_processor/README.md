@@ -1,6 +1,46 @@
 # Twitter Archive Processor
 
-A comprehensive framework for processing, analyzing, and exporting Twitter archive data. This package provides modular components for handling tweets, conversations, URLs, and various export formats.
+A comprehensive framework for processing, analyzing, and exporting Twitter archive data.
+
+## Package Structure
+
+```
+twitter_archive_processor/
+├── core/               # Core processing functionality
+│   ├── archive.py     # Archive handling
+│   ├── processor.py   # Main processing logic
+│   ├── metadata.py    # Tweet metadata
+│   └── conversation.py # Thread reconstruction
+├── schema/            # Schema handling
+│   ├── validator.py   # Schema validation
+│   ├── inspector.py   # Schema inspection
+│   └── generator.py   # Schema generation
+├── tweets/            # Tweet implementations
+│   ├── base.py       # Base tweet class
+│   ├── factory.py    # Tweet creation
+│   └── types/        # Tweet type definitions
+├── export/           # Export formats
+├── utils/            # Utilities
+└── url_analysis/     # URL processing
+```
+
+## Recent Updates
+
+1. Enhanced modularity:
+   - Core functionality in dedicated subpackages
+   - Improved separation of concerns
+   - Better encapsulation
+
+2. New utilities:
+   - Rate limiting
+   - Caching
+   - Logging configuration
+   - Schema validation
+
+3. Improved testing:
+   - Comprehensive test suite
+   - Better test organization
+   - Increased coverage
 
 ## Features
 

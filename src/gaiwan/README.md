@@ -54,13 +54,58 @@ url_analysis = processor.analyze_urls()
 
 ```
 gaiwan/
-├── twitter_archive_processor/    # Core processing functionality
-│   ├── export/                  # Export format handlers
-│   ├── tweets/                  # Tweet processing
-│   └── url_analysis/           # URL analysis and APIs
-├── schema_inspection/          # Schema analysis tools
-└── canonicalize.py            # Data canonicalization
+├── twitter_archive_processor/
+│   ├── core/               # Core processing functionality
+│   │   ├── archive.py
+│   │   ├── processor.py
+│   │   ├── metadata.py
+│   │   └── conversation.py
+│   ├── schema/            # Schema validation and management
+│   │   ├── validator.py
+│   │   ├── inspector.py
+│   │   └── generator.py
+│   ├── tweets/            # Tweet type implementations
+│   │   ├── base.py
+│   │   ├── factory.py
+│   │   └── types/
+│   ├── export/           # Export format handlers
+│   │   ├── markdown.py
+│   │   ├── chatml.py
+│   │   └── oai.py
+│   ├── utils/            # Utility functions
+│   │   ├── config.py
+│   │   ├── logging.py
+│   │   ├── rate_limiter.py
+│   │   └── cache.py
+│   └── url_analysis/     # URL processing
+├── Schema Inspection/    # Schema analysis tools
+└── README.md
+
+tests/                   # Centralized test directory
+├── test_core/          # Core functionality tests
+├── test_tweets/        # Tweet handling tests
+├── test_export/        # Export format tests
+├── test_url_analysis/  # URL analysis tests
+└── test_utils/         # Utility function tests
 ```
+
+## Recent Changes
+
+1. Reorganized package structure:
+   - Moved core functionality into `core/` subpackage
+   - Created dedicated `schema/` subpackage
+   - Added `utils/` subpackage for common utilities
+
+2. Unified testing framework:
+   - Centralized all tests in `tests/` directory
+   - Organized by component
+   - Added comprehensive test fixtures
+   - Improved test coverage
+
+3. Enhanced modularity:
+   - Separated concerns between subpackages
+   - Improved encapsulation
+   - Cleaner interfaces between components
 
 ## Core Components
 
