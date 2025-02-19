@@ -1,152 +1,241 @@
-# Twitter Archive URL Analyzer
+# Twitter Archive URL Analysis Package
 
-A Python package for analyzing URLs from Twitter archive data. This package processes Twitter archive JSON files to extract, analyze, and report on URLs shared in tweets.
+This package provides a comprehensive framework for analyzing URLs found in Twitter archives, including content analysis, domain normalization, and metadata extraction.
 
 ## Features
 
-- Extracts URLs from Twitter archive JSON files
-- Resolves shortened URLs (t.co, bit.ly, etc.)
-- Normalizes domain names for consistent analysis
-- Performs concurrent content analysis of URLs:
-  - Extracts page titles and descriptions
-  - Counts embedded links and images
-  - Analyzes text content
-  - Generates content hashes for duplicate detection
-- Generates comprehensive URL statistics and reports
-- Supports incremental processing of archives
-- Saves results in Parquet format for efficient storage and analysis
-- Intelligent caching of web content to avoid redundant fetches
+- URL extraction and analysis:
+  - Extracts URLs from tweet text and entities
+  - Resolves shortened URLs (t.co, bit.ly, etc.)
+  - Normalizes domains for consistent analysis
+  - Concurrent content fetching and analysis
+- Content analysis:
+  - Page title and description extraction
+  - Link and image counting
+  - Text content analysis
+  - Content hashing for duplicate detection
+- Caching and rate limiting:
+  - Disk-based content caching
+  - Configurable cache TTL
+  - Smart rate limiting
+  - Retry mechanisms
 
 ## Installation
 
 ```bash
-pip install twitter-archive-processor
+pip install gaiwan-twitter-archive-processor
 ```
 
-## Usage
-
-### Command Line Interface
-
-```bash
-python -m gaiwan.twitter_archive_processor.url_analysis /path/to/archive/directory --output urls.parquet
-```
-
-Options:
-- `archive_dir`: Directory containing Twitter archive JSON files
-- `--output`: Path to save results (default: urls.parquet)
-- `--debug`: Enable debug logging
-- `--force`: Force reanalysis of all archives
-
-### Python API
+## Quick Start
 
 ```python
-from pathlib import Path
 from gaiwan.twitter_archive_processor.url_analysis import URLAnalyzer
+from pathlib import Path
 
-# Initialize analyzer with optional content cache directory
+# Initialize analyzer
 analyzer = URLAnalyzer(
-    archive_dir=Path("/path/to/archive/directory"),
-    content_cache_dir=Path("/path/to/cache")  # Optional
+    archive_dir=Path("path/to/archives"),
+    content_cache_dir=Path("path/to/cache")
 )
 
-# Process archives and get results
+# Analyze URLs in archives
 df = analyzer.analyze_archives()
 
-# DataFrame columns:
-# Basic URL Information:
-# - username: Twitter username from archive
-# - tweet_id: Original tweet ID
-# - tweet_created_at: Tweet timestamp
-# - url: Original URL from tweet
-# - domain: Normalized domain name
-# - raw_domain: Original domain before normalization
-# - protocol: URL protocol (http/https)
-# - path: URL path
-# - query: URL query parameters
-# - fragment: URL fragment
-#
-# Content Analysis Results:
-# - page_title: Title of the webpage
-# - page_description: Meta description or summary
-# - content_type: MIME type of the content
-# - content_hash: SHA-256 hash of content
-# - linked_urls: Number of links found on page
-# - image_count: Number of images on page
-# - fetch_status: Status of content analysis
-# - fetch_error: Error message if fetch failed
-# - fetch_time: Timestamp of content analysis
+# Get domain statistics
+domain_stats = analyzer.get_domain_stats()
 ```
 
-## Input Requirements
+## Architecture
 
-- Directory containing Twitter archive JSON files
-- Each archive file should be named `{username}_archive.json`
-- Archive files should follow Twitter's JSON format containing:
-  - `tweets` array
-  - Each tweet object containing `tweet` with `id_str`, `created_at`, `full_text`, and `entities`
-
-## Outputs
-
-1. **Parquet File**
-   - Contains detailed URL and content analysis data in a pandas DataFrame
-   - Saved to specified output path (default: urls.parquet)
-
-2. **Analysis Report**
-   - Overall statistics
-   - URL resolution status
-   - Domain analysis
-   - Protocol statistics
-   - Content analysis metrics
-
-3. **Debug Log**
-   - Detailed URL resolution logs saved to `url_resolution.log`
-   - Contains information about failed resolutions and errors
-
-4. **Content Cache**
-   - Cached web content and metadata
-   - Configurable TTL (default: 30 days)
-   - Reduces redundant fetches and respects rate limits
-
-## Dependencies
-
-- pandas
-- requests
-- urllib3
-- orjson
-- tqdm
-- beautifulsoup4
-- aiohttp
-- aiofiles
-- pyarrow
-
-## Package Structure
-
+### Class Hierarchy
 ```
-gaiwan/twitter_archive_processor/url_analysis/
-├── __init__.py          # Package exports
-├── analyzer.py          # Core URL analysis logic
-├── cli.py              # Command-line interface
-├── content.py          # Content analysis and caching
-├── domain.py           # Domain normalization
-└── metadata.py         # URL metadata handling
+URLAnalyzer
+├── ContentAnalyzer
+├── DomainNormalizer
+└── URLAnalysisReporter
 ```
+
+### Core Classes
+
+#### URLAnalyzer
+```python
+class URLAnalyzer:
+    def __init__(
+        self, 
+        archive_dir: Optional[Path] = None,
+        content_cache_dir: Optional[Path] = None
+    ):
+        """
+        Initialize URL analyzer
+        Args:
+            archive_dir (Path): Directory containing archives
+            content_cache_dir (Path): Cache directory for content
+        """
+    
+    def analyze_archives(self) -> pd.DataFrame:
+        """Analyze URLs in all archives"""
+        
+    def get_domain_stats(self) -> pd.DataFrame:
+        """Get domain frequency statistics"""
+        
+    async def analyze_content(
+        self, 
+        urls: List[str],
+        url_pbar: tqdm
+    ) -> Dict[str, PageContent]:
+        """Analyze content of URLs concurrently"""
+```
+
+#### ContentAnalyzer
+```python
+class ContentAnalyzer:
+    def __init__(self, cache_dir: Optional[Path] = None):
+        """
+        Initialize content analyzer
+        Args:
+            cache_dir (Path): Directory for caching content
+        """
+    
+    async def analyze_url(
+        self,
+        session: aiohttp.ClientSession,
+        url: str
+    ) -> PageContent:
+        """Analyze content of a single URL"""
+```
+
+## Data Models
+
+### PageContent
+```python
+@dataclass
+class PageContent:
+    url: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    text_content: Optional[str] = None
+    links: Set[str] = None
+    images: Set[str] = None
+    fetch_time: datetime = None
+    content_hash: Optional[str] = None
+    content_type: Optional[str] = None
+    status_code: Optional[int] = None
+    error: Optional[str] = None
+```
+
+### URLMetadata
+```python
+@dataclass
+class URLMetadata:
+    url: str
+    title: Optional[str] = None
+    fetch_status: str = 'not_attempted'
+    fetch_error: Optional[str] = None
+    content_type: Optional[str] = None
+    last_fetch_time: Optional[datetime] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+```
+
+## Output Formats
+
+### DataFrame Columns
+```python
+{
+    'username': str,          # Twitter username
+    'tweet_id': str,          # Tweet ID
+    'tweet_created_at': datetime,  # Tweet timestamp
+    'url': str,              # Original URL
+    'domain': str,           # Normalized domain
+    'raw_domain': str,       # Original domain
+    'protocol': str,         # URL protocol
+    'path': str,             # URL path
+    'query': str,            # Query parameters
+    'fragment': str,         # URL fragment
+    'fetch_status': str,     # Content fetch status
+    'fetch_error': str,      # Error message if any
+    'content_type': str,     # MIME type
+    'title': str,            # Page title
+    'description': str       # Page description
+}
+```
+
+## Configuration
+
+### Rate Limiting
+```python
+rate_limits = {
+    429: 30,  # Too Many Requests
+    403: 10,  # Forbidden
+    405: 10   # Method Not Allowed
+}
+```
+
+### Content Types
+```python
+skip_content_types = {
+    'application/pdf',
+    'application/zip',
+    'image/',
+    'video/',
+    'audio/',
+    'application/octet-stream'
+}
+```
+
+## Maintaining This README
+
+This README should be updated when:
+1. New analyzers are added
+2. Output formats change
+3. Configuration options are modified
+4. API methods are changed
+
+Update checklist:
+- [ ] Class hierarchy diagram
+- [ ] Data model documentation
+- [ ] Output format examples
+- [ ] Configuration options
+- [ ] API examples
 
 ## Error Handling
 
-- Failed URL resolutions are logged but don't halt processing
-- Backup files are created before overwriting existing results
-- Incremental processing supports resuming interrupted analysis
-- Content analysis failures are captured and reported
-- Rate limiting and retry logic for web requests
+The package handles:
+- Network timeouts and errors
+- Rate limiting
+- Invalid URLs
+- Binary content detection
+- Cache read/write errors
+- Memory management
+- Concurrent request limits
 
-## Performance Considerations
+## Testing
 
-- Asynchronous content fetching for improved throughput
-- Configurable concurrency limits
-- Intelligent caching to reduce network requests
-- Streaming response handling for memory efficiency
-- Binary content detection and skipping
+Run tests with:
+```bash
+pytest tests/url_analysis/
+```
+
+Test coverage includes:
+- URL extraction
+- Content analysis
+- Domain normalization
+- Rate limiting
+- Caching
+- Error handling
+
+## Dependencies
+
+Required:
+- Python 3.6+
+- aiohttp
+- beautifulsoup4
+- pandas
+- tqdm
+- orjson
+
+Optional:
+- pytest for testing
 
 ## License
 
-[Add your license information here]
+MIT License - See LICENSE file for details

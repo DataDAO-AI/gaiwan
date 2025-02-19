@@ -1,106 +1,162 @@
-# gaiwan
-gaiwan consists of three main components that work together to process Twitter archives:
+# Gaiwan - Twitter Archive Analysis Framework
 
-1. **Archive Processor** - Downloads and normalizes Twitter archive data
-2. **Conversation Analyzer** - Builds and analyzes conversation threads
-3. **Stats Collector** - Generates statistics about the archives
+A comprehensive framework for analyzing Twitter/X archives, with support for multiple formats, data analysis, and export capabilities.
 
-Here's a step-by-step guide to exercise the full functionality:
+## Overview
 
-1. First, set up a working directory and create necessary folders:
+Gaiwan provides tools for:
+- Processing Twitter archive data
+- Analyzing conversations and threads
+- Extracting and analyzing URLs
+- Exporting to various formats
+- Schema validation and management
 
-```bash
-mkdir twitter_analysis
-cd twitter_analysis
-mkdir archives output stats
-```
+## Key Features
 
-2. Download and process archives:
+- Archive Processing:
+  - Multiple archive format support
+  - Tweet parsing and normalization
+  - Thread reconstruction
+  - Media attachment handling
+- Analysis Tools:
+  - URL extraction and analysis
+  - Domain normalization
+  - Content fetching
+  - Schema validation
+- Export Formats:
+  - Markdown
+  - JSONL
+  - ChatML
+  - OpenAI format
 
-```bash
-python archive_processor.py archives/ --all
-```
-
-This will:
-- Download archives from Supabase for all available accounts
-- Process them into normalized format
-- Create two main output files:
-  - `archives/canonical_tweets.jsonl`
-  - `archives/reply_edges.jsonl`
-- Generate stats in `archives/stats/`
-
-Alternative ways to run the archive processor:
-
-```bash
-# Process specific usernames
-python archive_processor.py archives/ --usernames user1 user2 user3
-
-# Process usernames from a file
-python archive_processor.py archives/ --username-file usernames.txt
-
-# Force reprocessing of already processed archives
-python archive_processor.py archives/ --all --force-reprocess
-```
-
-3. Analyze conversations:
+## Installation
 
 ```bash
-# Basic search and display
-python conversation_analyzer.py \
-    archives/canonical_tweets.jsonl \
-    archives/reply_edges.jsonl \
-    --search "from:specificuser #python"
-
-# Search and save results
-python conversation_analyzer.py \
-    archives/canonical_tweets.jsonl \
-    archives/reply_edges.jsonl \
-    --search "machine learning filter:links" \
-    --output output/ml_conversations.jsonl
+pip install gaiwan
 ```
 
-Example search queries:
-```bash
-# Tweets containing specific words
---search "python programming"
+## Quick Start
 
-# Exact phrases
---search '"machine learning" python'
+```python
+from gaiwan import ArchiveProcessor
+from pathlib import Path
 
-# From specific accounts
---search "from:username python"
+# Initialize processor
+processor = ArchiveProcessor(archive_dir=Path("path/to/archives"))
 
-# With hashtags
---search "#python #coding"
+# Process archives
+processor.load_archives()
 
-# Excluding words
---search "python -javascript"
+# Export conversations
+processor.export_all("markdown", Path("output/markdown"))
 
-# Complex queries
---search 'from:user1 to:user2 "interesting topic" #tech -spam'
+# Analyze URLs
+url_analysis = processor.analyze_urls()
 ```
 
-4. View statistics:
-The stats are automatically generated during archive processing and saved in the `archives/stats/` directory. Each archive gets its own stats file named `{username}_archive_stats.json`.
-
-Sample workflow putting it all together:
+## Command Line Usage
 
 ```bash
-# 1. Create directories
-mkdir -p twitter_analysis/{archives,output,stats}
-cd twitter_analysis
+# Process archives
+python -m gaiwan.twitter_archive_processor \
+    path/to/archives \
+    path/to/output \
+    --format markdown chatml
 
-# 2. Download and process archives
-python archive_processor.py archives/ --all
+# Analyze URLs
+python -m gaiwan.twitter_archive_processor.url_analysis \
+    path/to/archives \
+    --output urls.parquet
 
-# 3. Search for interesting conversations
-python conversation_analyzer.py \
-    archives/canonical_tweets.jsonl \
-    archives/reply_edges.jsonl \
-    --search 'from:techuser "machine learning" #AI filter:links' \
-    --output output/ml_discussions.jsonl
-
-# 4. Check the generated files
-ls -l archives/stats/
-cat output/ml_discussions.jsonl | jq  # if you have jq installed
+# Inspect schema
+python -m gaiwan.schema_inspection.inspect_json \
+    path/to/archive.json
 ```
+
+## Project Structure
+
+```
+gaiwan/
+├── twitter_archive_processor/    # Core processing functionality
+│   ├── export/                  # Export format handlers
+│   ├── tweets/                  # Tweet processing
+│   └── url_analysis/           # URL analysis and APIs
+├── schema_inspection/          # Schema analysis tools
+└── canonicalize.py            # Data canonicalization
+```
+
+## Configuration
+
+Create a config file at `~/.config/gaiwan/config.json`:
+
+```json
+{
+    "api_keys": {
+        "youtube": "YOUR_KEY",
+        "github": "YOUR_KEY"
+    },
+    "cache": {
+        "ttl_days": 30,
+        "max_size_mb": 1000
+    }
+}
+```
+
+## Documentation
+
+- [Twitter Archive Processor](src/gaiwan/twitter_archive_processor/README.md)
+- [URL Analysis](src/gaiwan/twitter_archive_processor/url_analysis/README.md)
+- [Schema Inspection](src/gaiwan/schema_inspection/README.md)
+
+## Development
+
+### Setup
+
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -e ".[dev]"
+```
+
+### Testing
+
+```bash
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=gaiwan
+
+# Run specific test file
+pytest tests/test_processor.py
+```
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new features
+4. Update documentation
+5. Submit pull request
+
+## Dependencies
+
+Required:
+- Python 3.6+
+- pandas
+- aiohttp
+- beautifulsoup4
+- tqdm
+- orjson
+- duckdb
+
+Optional:
+- pytest for testing
+- jupyter for notebooks
+
+## License
+
+MIT License - See LICENSE file for details

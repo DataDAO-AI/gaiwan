@@ -1,185 +1,250 @@
 # Gaiwan
-Twitter/X Archive Analysis Framework
+
+A comprehensive framework for analyzing Twitter/X archives, with support for multiple formats, data analysis, and export capabilities.
+
+## Features
+
+- Archive Processing:
+  - Multiple archive format support
+  - Tweet parsing and normalization
+  - Thread reconstruction
+  - Media attachment handling
+- Analysis Tools:
+  - URL extraction and analysis
+  - Domain normalization
+  - Content fetching
+  - Schema validation
+- Export Formats:
+  - Markdown
+  - JSONL
+  - ChatML
+  - OpenAI format
+- Schema Management:
+  - Format detection
+  - Version tracking
+  - Migration support
+  - Validation rules
+
+## Installation
+
+```bash
+pip install gaiwan
+```
+
+## Quick Start
+
+```python
+from gaiwan import ArchiveProcessor
+from pathlib import Path
+
+# Initialize processor
+processor = ArchiveProcessor(archive_dir=Path("path/to/archives"))
+
+# Process archives
+processor.load_archives()
+
+# Export conversations
+processor.export_all("markdown", Path("output/markdown"))
+
+# Analyze URLs
+url_analysis = processor.analyze_urls()
+```
 
 ## Package Structure
+
+```
 gaiwan/
-├── schema_inspection/ # Schema analysis and validation
-├── twitter_archive_processor/
-│ ├── export/ # Export format handlers
-│ ├── tweets/ # Tweet processing
-│ └── url_analysis/ # URL analysis and APIs
-└── README.md
-## Core Features
-Reference implementation:
-## Usage Context for AI
-When building new packages:
+├── twitter_archive_processor/    # Core processing functionality
+│   ├── export/                  # Export format handlers
+│   ├── tweets/                  # Tweet processing
+│   └── url_analysis/           # URL analysis and APIs
+├── schema_inspection/          # Schema analysis tools
+└── canonicalize.py            # Data canonicalization
+```
 
-1. Package Organization:
-   - Follow modular architecture pattern
-   - Implement clear class hierarchies
-   - Use consistent file naming
+## Core Components
 
-2. Code Standards:
-   - Include type hints
-   - Add comprehensive docstrings
-   - Follow error handling patterns
-   - Implement logging
+### Twitter Archive Processor
 
-3. Testing Requirements:
-   - Unit tests for new classes
-   - Integration tests for features
-   - Test error conditions
-   - Document test coverage
+Main package for processing Twitter archives. See [detailed documentation](twitter_archive_processor/README.md).
 
-4. Documentation:
-   - Update package README
-   - Include usage examples
-   - Document class relationships
-   - Maintain API documentation
+```python
+from gaiwan.twitter_archive_processor import ArchiveProcessor
 
-## Implementation Patterns
-- Error handling: See url_analyzer.py
-- Async processing: See url_analysis/analyzer.py
-- Class hierarchy: See export/README.md
-- Data processing: See archive.py
+processor = ArchiveProcessor(archive_dir)
+processor.load_archives()
+processor.export_all("markdown", output_dir)
+```
 
-# Schema Inspection Package
-Tools for analyzing and validating Twitter archive schemas.
+### Schema Inspector
 
-## Features
-- Schema validation
-- Format detection
-- Version tracking
-- Migration support
+Tools for analyzing and validating archive schemas.
 
-## Usage Context for AI
-When extending this package:
+```python
+from gaiwan.schema_inspection import inspect_archive
 
-1. Schema Handling:
-   - Support multiple archive formats
-   - Implement version detection
-   - Add migration paths
-   - Validate schema integrity
+# Analyze archive structure
+schema = inspect_archive("path/to/archive.json")
 
-2. Validation Rules:
-   - Check required fields
-   - Validate data types
-   - Handle optional fields
-   - Support custom validators
+# Validate against known format
+is_valid = schema.validate()
+```
 
-3. Error Reporting:
-   - Detailed validation errors
-   - Schema mismatch reports
-   - Migration recommendations
-   - Format detection results
+### URL Analyzer
 
-## Input Requirements
-- Twitter archive JSON files
-- Schema definition files
-- Version information
-# Twitter Archive Processor
+Advanced URL analysis with content fetching. See [detailed documentation](twitter_archive_processor/url_analysis/README.md).
 
-Core archive processing functionality.
+```python
+from gaiwan.twitter_archive_processor.url_analysis import URLAnalyzer
 
-## Components
-Reference implementation:
+analyzer = URLAnalyzer(archive_dir)
+results = analyzer.analyze_archives()
+```
 
-1. ArchiveProcessor: Main processing class
-2. ExportHandler: Handles different archive formats
-3. TweetProcessor: Processes tweets and metadata
-4. URLAnalyzer: Analyzes URLs and content
-## Usage Context for AI
-When extending this package:
+## Input Formats
 
-1. Archive Processing:
-   - Follow ArchiveProcessor patterns
-   - Implement incremental processing
-   - Handle multiple archive formats
-   - Support concurrent processing
+### Archive JSON Structure
+```json
+{
+    "account": [{
+        "account": {
+            "username": "string",
+            "accountId": "string",
+            "createdAt": "string",
+            "accountDisplayName": "string"
+        }
+    }],
+    "tweets": [{
+        "tweet": {
+            "id_str": "string",
+            "full_text": "string",
+            "created_at": "string",
+            "entities": {...},
+            "extended_entities": {...}
+        }
+    }],
+    "note-tweet": [{
+        "noteTweet": {
+            "noteTweetId": "string",
+            "core": {
+                "text": "string",
+                "urls": [...],
+                "mentions": [...],
+                "hashtags": [...]
+            },
+            "createdAt": "string"
+        }
+    }],
+    "like": [{
+        "like": {
+            "tweetId": "string",
+            "fullText": "string",
+            "expandedUrl": "string"
+        }
+    }]
+}
+```
 
-2. Data Flow:
-   - Archive loading
-   - Tweet extraction
-   - URL analysis
-   - Export formatting
+## Command Line Tools
 
-3. Error Handling:
-   - Archive validation errors
-   - Processing failures
-   - Export errors
-   - Resource cleanup
+### Archive Processor
+```bash
+python -m gaiwan.twitter_archive_processor \
+    path/to/archives \
+    path/to/output \
+    --format markdown chatml
+```
 
-## Subpackages
-- export/: Format-specific exporters
-- tweets/: Tweet processing logic
-- url_analysis/: URL analysis tools
-# Export Package
+### Schema Inspector
+```bash
+python -m gaiwan.schema_inspection.inspect_json \
+    path/to/archive.json
+```
 
-Reference implementation:
+### URL Analyzer
+```bash
+python -m gaiwan.twitter_archive_processor.url_analysis \
+    path/to/archives \
+    --output urls.parquet
+```
 
-1. ExportHandler: Base class for format-specific exporters
-2. JSONExporter: Handles JSON export
-3. CSVExporter: Handles CSV export
-4. HTMLExporter: Handles HTML export
-## Usage Context for AI
-When extending this package:
+## Configuration
 
-1. New Exporters:
-   - Inherit from base Exporter
-   - Implement required methods
-   - Handle all tweet types
-   - Support thread structure
+### Default Paths
+```python
+CONFIG_PATH = Path.home() / ".config" / "gaiwan" / "config.json"
+CACHE_PATH = Path.home() / ".cache" / "gaiwan"
+```
 
-2. Format Requirements:
-   - Document format specification
-   - Include example output
-   - List supported features
-   - Note any limitationst
-# URL Analysis Package
+### Config Format
+```json
+{
+    "api_keys": {
+        "youtube": "string",
+        "github": "string"
+    },
+    "cache": {
+        "ttl_days": 30,
+        "max_size_mb": 1000
+    }
+}
+```
 
-Reference implementation:
+## Maintaining This Package
 
-1. URLAnalyzer: Base class for URL analysis
-2. ContentAnalyzer: Analyzes URL content
-3. MetadataExtractor: Extracts metadata from URLs
-## API Subpackage
-The APIs package provides interfaces for:
-- URL resolution
-- Content analysis
-- Metadata extraction
-- Cache management
+### Documentation Updates
+Update READMEs when:
+1. New components are added
+2. Core interfaces change
+3. Input/output formats change
+4. Configuration options are modified
 
-### Usage Context for AI
-When extending APIs:
-1. Follow existing patterns for:
-   - Rate limiting
-   - Error handling
-   - Caching
-   - Async operations
-2. Document all endpoints
-3. Include usage examples
-4. Ensure backward compatibility
-# Tweets Package
+### Version Control
+- Follow semantic versioning
+- Document breaking changes
+- Maintain changelog
+- Update migration guides
 
-Tweet processing and analysis functionality.
+### Testing Requirements
+- Unit tests for new components
+- Integration tests for features
+- Schema validation tests
+- Performance benchmarks
 
-## Features
-- Tweet parsing
-- Thread reconstruction
-- Quote tweet handling
-- Media attachment processing
+## Error Handling
 
-## Usage Context for AI
-When extending this package:
+The package handles:
+- Invalid archive formats
+- Missing or malformed data
+- Network timeouts
+- Rate limiting
+- Resource constraints
+- API errors
+- Schema violations
 
-1. Tweet Processing:
-   - Handle all tweet types
-   - Support thread linking
-   - Process attachments
-   - Maintain metadata
+## Dependencies
 
-2. Data Structures:
-   - Follow Tweet class pattern
-   - Implement thread hierarchy
-   - Support quote tweets
-   - Handle missing data
+Required:
+- Python 3.6+
+- pandas
+- aiohttp
+- beautifulsoup4
+- tqdm
+- orjson
+- duckdb
+
+Optional:
+- pytest for testing
+- jupyter for notebooks
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new features
+4. Update documentation
+5. Submit pull request
+
+## License
+
+MIT License - See LICENSE file for details
