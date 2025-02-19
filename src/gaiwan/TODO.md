@@ -1,58 +1,87 @@
 # Gaiwan TODO
 
-## Quote Tweet Investigation
-1. Run schema generator on personal Twitter archive (`tweets.js`) to verify field structure
-2. Analyze URL entities to detect quote tweets:
-   - Look for `twitter.com/*/status/*` patterns in expanded URLs
-   - Extract quoted tweet IDs from URLs
-   - Consider edge cases (deleted tweets, private accounts)
-3. Update CanonicalTweet to handle quote tweets via URLs:
-   - Add URL-based quote detection
-   - Remove old quote tweet field assumptions
-   - Add tests with sample quote tweet URLs
+## Content Analysis
+- [x] URL extraction and normalization (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 76-81)
+- [x] Domain grouping and pattern matching (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 47-52)
+- [x] Shortened URL resolution (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 206-215)
+- [x] Page title extraction (src/gaiwan/url_analyzer.py, lines 412-431)
+- [x] Content type detection (src/gaiwan/url_analyzer.py, lines 424-429)
+- [ ] Meta description extraction
+  - [ ] Implement OpenGraph parsing
+  - [ ] Add fallback to first paragraph
+  - [ ] Handle different meta description formats
+- [ ] Keyword Analysis
+  - [ ] Implement keyword extraction
+  - [ ] Add relevance scoring
+  - [ ] Consider language detection
+  - [ ] Add topic clustering
 
-## Schema Improvements
-1. Compare archive schema between:
-   - Community archive format
-   - Personal Twitter archive format 
-   - Document differences
-2. Update schema handling to work with both formats
-3. Consider schema versioning for different archive types
-
-## General Improvements
-1. Add more validation and error handling
-2. Improve logging and debugging output
-3. Add documentation about archive formats
-4. Consider adding archive format detection/validation 
+## Thread Analysis
+- [ ] Quote Tweet Investigation
+  - [ ] Run schema generator on personal archive
+  - [ ] Analyze URL entities to detect quote tweets
+  - [ ] Extract quoted tweet IDs from URLs
+  - [ ] Handle edge cases (deleted/private tweets)
+  - [ ] Update CanonicalTweet implementation
+  - [ ] Add comprehensive tests
+- [x] Basic thread reconstruction (src/gaiwan/twitter_archive_processor/archive.py, lines 63-84)
+- [ ] Enhanced Thread Features
+  - [ ] Implement thread visualization
+  - [ ] Add conversation statistics
+  - [ ] Track thread participation metrics
+  - [ ] Consider thread categorization
 
 ## User Identity & Graph Features
-1. Switch to user ID as primary key:
-   - Find user ID field in archive schemas
-   - Update all username-based lookups to use IDs
-   - Create ID->username mappings
-   - Handle cases where user ID is missing
+- [ ] User ID Implementation
+  - [ ] Switch to user ID as primary key
+  - [ ] Find user ID field in archive schemas
+  - [ ] Update username-based lookups to use IDs
+  - [ ] Create ID->username mappings
+  - [ ] Handle missing user ID cases
 
-2. Track identity changes over time:
-   - Build timeline of username changes
-   - Track display name changes
-   - Consider storing avatar/profile pic history
-   - Add API to query historical identities
+- [ ] Identity Change Tracking
+  - [ ] Build timeline of username changes
+  - [ ] Track display name changes
+  - [ ] Store avatar/profile pic history
+  - [ ] Add API to query historical identities
+  - [ ] Implement change detection logic
 
-3. Enhanced Graph Features:
-   - Build user ID -> thread roots index
-   - Build user ID -> mentions index
-   - Consider bidirectional mappings (who mentioned this user?)
-   - Add timeline views (all interactions with user X)
-   - Consider tracking deleted/suspended accounts
+- [ ] Graph Analysis
+  - [ ] Build user ID -> thread roots index
+  - [ ] Build user ID -> mentions index
+  - [ ] Implement bidirectional mappings
+  - [ ] Add timeline views
+  - [ ] Track deleted/suspended accounts
+  - [ ] Add relationship strength metrics
 
-4. Identity Resolution:
-   - Handle username recycling edge cases
-   - Build confidence scoring for identity matches
-   - Consider fuzzy matching for display names
-   - Document identity resolution strategy
+## Schema & Validation
+- [x] Basic archive schema handling (src/gaiwan/twitter_archive_processor/url_analysis/README.md, lines 84-86)
+- [ ] Schema Management
+  - [ ] Compare archive formats
+  - [ ] Document format differences
+  - [ ] Implement schema versioning
+  - [ ] Add format auto-detection
 
-5. Performance Considerations:
-   - Evaluate index size impacts
-   - Consider caching strategies
-   - Benchmark large graph operations
-   - Document memory/storage tradeoffs
+## Performance & Infrastructure
+- [x] Asynchronous content fetching (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 157-159)
+- [x] Intelligent caching (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 71-74)
+- [x] Rate limiting (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 54-69)
+- [x] Concurrent processing (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 177-184)
+
+## Testing & Documentation
+- [x] Export format testing (src/gaiwan/twitter_archive_processor/url_analysis/README.md, lines 90-108)
+- [x] Basic API documentation (src/gaiwan/twitter_archive_processor/url_analysis/README.md, lines 40-78)
+- [x] CLI documentation (src/gaiwan/twitter_archive_processor/url_analysis/README.md, lines 28-38)
+- [ ] Additional Testing
+  - [ ] Add identity resolution tests
+  - [ ] Create performance benchmarks
+  - [ ] Add schema validation tests
+  - [ ] Implement integration tests
+  - [ ] Add stress testing
+
+- [ ] Enhanced Documentation
+  - [ ] Document archive formats
+  - [ ] Add identity resolution guide
+  - [ ] Document performance tradeoffs
+  - [ ] Create troubleshooting guide
+  - [ ] Add migration guides
