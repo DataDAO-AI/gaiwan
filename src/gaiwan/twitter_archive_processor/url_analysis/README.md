@@ -296,3 +296,30 @@ Optional:
 ## License
 
 MIT License - See LICENSE file for details
+
+### Domain Normalization
+
+The package now includes enhanced domain normalization:
+
+```python
+normalizer = DomainNormalizer()
+
+# Twitter/X domain normalization
+normalizer.normalize('x.com')              # -> 'twitter.com'
+normalizer.normalize('subdomain.x.com')    # -> 'twitter.com'
+normalizer.normalize('twitter.com')        # -> 'twitter.com'
+normalizer.normalize('mobile.twitter.com') # -> 'twitter.com'
+
+# Other platform normalizations
+normalizer.normalize('youtu.be')           # -> 'youtube.com'
+normalizer.normalize('en.wikipedia.org')   # -> 'wikipedia.org'
+normalizer.normalize('blog.medium.com')    # -> 'medium.com'
+```
+
+Special cases handled:
+- Twitter/X domains (*.x.com, *.twitter.com)
+- YouTube short URLs (youtu.be)
+- Wikipedia language subdomains
+- Medium and Substack custom domains
+- GitHub-related domains
+- Common URL shorteners
