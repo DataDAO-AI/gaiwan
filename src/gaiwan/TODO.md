@@ -1,5 +1,17 @@
 # Gaiwan TODO
 
+# Instructions for AI Assistant
+When updating this TODO list:
+1. Use checkboxes [x] for completed items, [ ] for incomplete items
+2. For completed items, add implementation location in parentheses:
+   - Filename
+   - Line numbers
+   - Git commit number (if available)
+3. Keep existing categories organized
+4. Add new categories as needed
+5. Maintain hierarchy of tasks and subtasks
+6. Keep implementation references up to date
+
 ## Content Analysis
 - [x] URL extraction and normalization (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 76-81)
 - [x] Domain grouping and pattern matching (src/gaiwan/twitter_archive_processor/url_analysis/analyzer.py, lines 47-52)
