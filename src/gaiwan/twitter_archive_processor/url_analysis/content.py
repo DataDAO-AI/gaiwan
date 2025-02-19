@@ -3,7 +3,6 @@ import aiohttp
 from bs4 import BeautifulSoup
 from typing import Dict, List, Optional, Set
 import logging
-from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import hashlib
 from pathlib import Path
@@ -21,41 +20,6 @@ from .models import PageContent
 import csv
 
 logger = logging.getLogger(__name__)
-
-@dataclass
-class PageContent:
-    """Container for scraped webpage content and metadata."""
-    url: str
-    title: Optional[str] = None
-    description: Optional[str] = None
-    text_content: Optional[str] = None
-    links: Set[str] = None
-    images: Set[str] = None
-    fetch_time: datetime = None
-    content_hash: Optional[str] = None
-    content_type: Optional[str] = None
-    status_code: Optional[int] = None
-    error: Optional[str] = None
-
-    def __post_init__(self):
-        self.links = set() if self.links is None else self.links
-        self.images = set() if self.images is None else self.images
-        self.fetch_time = datetime.now(timezone.utc)
-
-    def to_dict(self) -> Dict:
-        return {
-            'url': self.url,
-            'title': self.title,
-            'description': self.description,
-            'text_content': self.text_content,
-            'links': list(self.links),
-            'images': list(self.images),
-            'fetch_time': self.fetch_time.isoformat(),
-            'content_hash': self.content_hash,
-            'content_type': self.content_type,
-            'status_code': self.status_code,
-            'error': self.error
-        }
 
 class ContentAnalyzer:
     """Asynchronous web content analyzer with caching."""
@@ -104,57 +68,45 @@ class ContentAnalyzer:
 
         # Load config and initialize APIs
         self.config = config or Config()
-        # self.youtube_api = YouTubeAPI(api_key=self.config.get_api_key('youtube')) if self.config.get_api_key('youtube') else None
-        # self.github_api = GitHubAPI(api_key=self.config.get_api_key('github')) if self.config.get_api_key('github') else None
+        self.youtube_api = YouTubeAPI(api_key=self.config.get_api_key('youtube')) if self.config.get_api_key('youtube') else None
+        self.github_api = GitHubAPI(api_key=self.config.get_api_key('github')) if self.config.get_api_key('github') else None
 
         # Setup URL processing log
         self.url_log_path = self.cache_dir / 'processed_urls.csv'
-        self._setup_url_log()
-        self.processed_urls = self._load_processed_urls()
+        self.processed_urls = {}
+        self._load_processed_urls()
 
-    def _setup_url_log(self):
-        """Initialize URL processing log if it doesn't exist."""
+    def _load_processed_urls(self):
+        """Load processed URLs from log file."""
         if not self.url_log_path.exists():
-            with open(self.url_log_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['url', 'timestamp', 'status'])
+            return
+        
+        with open(self.url_log_path, 'r') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) >= 3 and row[2] == 'success':
+                    url, timestamp, _ = row
+                    self.processed_urls[url] = datetime.fromisoformat(timestamp)
 
-    def _load_processed_urls(self) -> Dict[str, datetime]:
-        """Load previously processed URLs from log."""
-        processed = {}
-        if self.url_log_path.exists():
-            with open(self.url_log_path, 'r', newline='') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    if row['status'] == 'success':
-                        processed[row['url']] = datetime.fromisoformat(row['timestamp'])
-        return processed
-
-    async def _log_processed_url(self, url: str, status: str):
-        """Log a processed URL with timestamp."""
-        timestamp = datetime.now(timezone.utc)
-        async with aiofiles.open(self.url_log_path, 'a', newline='') as f:
-            writer = csv.writer(f)
-            await f.write(f"{url},{timestamp.isoformat()},{status}\n")
-        if status == 'success':
-            self.processed_urls[url] = timestamp
-
-    async def analyze_urls(self, urls: List[str], session: aiohttp.ClientSession, progress_callback=None) -> Dict[str, PageContent]:
+    async def analyze_urls(self, urls: List[str], session: Optional[aiohttp.ClientSession] = None, progress_callback=None) -> Dict[str, PageContent]:
         """Analyze multiple URLs concurrently with optional progress callback."""
+        if session is None:
+            async with aiohttp.ClientSession() as new_session:
+                return await self._analyze_urls_internal(urls, new_session, progress_callback)
+        return await self._analyze_urls_internal(urls, session, progress_callback)
+
+    async def _analyze_urls_internal(self, urls: List[str], session: aiohttp.ClientSession, progress_callback=None) -> Dict[str, PageContent]:
         results = {}
         semaphore = asyncio.Semaphore(self.max_concurrent)
         
-        # Process URLs in smaller sub-batches for better memory management
         for i in range(0, len(urls), self.batch_size):
             batch = urls[i:i + self.batch_size]
             batch_results = await self._process_batch(batch, session, semaphore, progress_callback)
             results.update(batch_results)
-            
-            # Force garbage collection after each sub-batch
             gc.collect()
         
         return results
-        
+
     async def _process_batch(self, urls: List[str], session: aiohttp.ClientSession, 
                            semaphore: asyncio.Semaphore, progress_callback) -> Dict[str, PageContent]:
         """Process a batch of URLs concurrently."""
@@ -194,17 +146,17 @@ class ContentAnalyzer:
             return cached_content
             
         # Try API handlers
-        # if self.youtube_api and ('youtube.com' in url or 'youtu.be' in url):
-        #     content = await self.youtube_api.process_url(url)
-        #     if content:
-        #         await self._save_to_cache(cache_path, content)
-        #         return content
+        if self.youtube_api and ('youtube.com' in url or 'youtu.be' in url):
+            content = await self.youtube_api.process_url(url)
+            if content:
+                await self._save_to_cache(cache_path, content)
+                return content
                 
-        # if self.github_api and 'github.com' in url:
-        #     content = await self.github_api.process_url(url)
-        #     if content:
-        #         await self._save_to_cache(cache_path, content)
-        #         return content
+        if self.github_api and 'github.com' in url:
+            content = await self.github_api.process_url(url)
+            if content:
+                await self._save_to_cache(cache_path, content)
+                return content
         
         # Fall back to regular web scraping
         logger.debug(f"Cache miss for {url}")
@@ -324,23 +276,24 @@ class ContentAnalyzer:
             async with aiofiles.open(cache_path, 'r') as f:
                 cache_data = json.loads(await f.read())
                 
-            # Check cache expiration
             fetch_time = datetime.fromisoformat(cache_data['fetch_time'])
-            if datetime.now(timezone.utc) - fetch_time > self.cache_ttl:
+            if not fetch_time.tzinfo:
+                fetch_time = fetch_time.replace(tzinfo=timezone.utc)
+            
+            # Strict cache expiration check
+            if (datetime.now(timezone.utc) - fetch_time) > self.cache_ttl:
                 logger.debug(f"Cache expired for {cache_data['url']}")
                 return None
                 
-            content = PageContent(
+            return PageContent(
                 url=cache_data['url'],
                 title=cache_data.get('title'),
                 description=cache_data.get('description'),
                 content_type=cache_data.get('content_type'),
                 status_code=cache_data.get('status_code'),
-                error=cache_data.get('error')
+                error=cache_data.get('error'),
+                fetch_time=fetch_time
             )
-            logger.debug(f"Loaded from cache: {content.url}")
-            return content
-            
         except Exception as e:
             logger.error(f"Failed to load cache from {cache_path}: {e}")
             return None

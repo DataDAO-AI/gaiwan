@@ -22,20 +22,14 @@ class DomainNormalizer:
         }
     
     def normalize(self, domain: str) -> str:
-        """Normalize a domain to its canonical form."""
+        """Normalize domain names."""
         domain = domain.lower()
-        
-        # Remove www. prefix
         if domain.startswith('www.'):
             domain = domain[4:]
-            
-        # Check direct mappings
-        for canonical, variants in self.domain_mappings.items():
-            if isinstance(variants, list) and domain in variants:
-                return canonical
-            elif callable(variants) and variants(domain):
-                return canonical
-                
+        if 'youtube.com' in domain or 'youtu.be' in domain:
+            return 'youtube.com'
+        if 'twitter.com' in domain or 'x.com' in domain:
+            return 'twitter.com'
         return domain
 
     def is_shortener(self, domain: str) -> bool:
