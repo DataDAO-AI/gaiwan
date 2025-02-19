@@ -45,8 +45,8 @@ When updating this TODO list:
 
 ## User Identity & Graph Features
 - [ ] User ID Implementation
-  - [ ] Switch to user ID as primary key
-  - [ ] Find user ID field in archive schemas
+  - [x] Switch to user ID as primary key (src/gaiwan/twitter_archive_processor/tweets/base.py, lines 8-16)
+  - [x] Find user ID field in archive schemas (src/gaiwan/canonicalize.py, lines 113-148)
   - [ ] Update username-based lookups to use IDs
   - [ ] Create ID->username mappings
   - [ ] Handle missing user ID cases
@@ -58,13 +58,34 @@ When updating this TODO list:
   - [ ] Add API to query historical identities
   - [ ] Implement change detection logic
 
-- [ ] Graph Analysis
-  - [ ] Build user ID -> thread roots index
-  - [ ] Build user ID -> mentions index
-  - [ ] Implement bidirectional mappings
-  - [ ] Add timeline views
-  - [ ] Track deleted/suspended accounts
-  - [ ] Add relationship strength metrics
+## Persona Generation
+- [ ] Data Aggregation
+  - [ ] Implement tweet content aggregation
+  - [ ] Extract behavioral patterns
+  - [ ] Analyze temporal posting patterns
+  - [ ] Track interaction networks
+  - [ ] Identify key topics and interests
+
+- [ ] Persona Analysis
+  - [ ] Create topic modeling pipeline
+  - [ ] Implement sentiment analysis
+  - [ ] Build interaction pattern analyzer
+  - [ ] Develop persona clustering algorithm
+  - [ ] Add temporal evolution tracking
+
+- [ ] Persona Export
+  - [ ] Design Naptha-compatible format
+  - [ ] Implement export pipeline
+  - [ ] Add validation checks
+  - [ ] Create format documentation
+  - [ ] Build conversion utilities
+
+- [ ] Visualization & Analysis
+  - [ ] Create persona network graphs
+  - [ ] Implement timeline visualizations
+  - [ ] Add topic distribution views
+  - [ ] Build interaction pattern displays
+  - [ ] Create persona comparison tools
 
 ## Schema & Validation
 - [x] Basic archive schema handling (src/gaiwan/twitter_archive_processor/url_analysis/README.md, lines 84-86)
@@ -90,6 +111,8 @@ When updating this TODO list:
   - [ ] Add schema validation tests
   - [ ] Implement integration tests
   - [ ] Add stress testing
+  - [ ] Add persona generation tests
+  - [ ] Implement format validation tests
 
 - [ ] Enhanced Documentation
   - [ ] Document archive formats
@@ -97,3 +120,5 @@ When updating this TODO list:
   - [ ] Document performance tradeoffs
   - [ ] Create troubleshooting guide
   - [ ] Add migration guides
+  - [ ] Document persona format specification
+  - [ ] Create persona generation guide
