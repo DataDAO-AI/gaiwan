@@ -75,6 +75,13 @@ class ContentAnalyzer:
         self.url_log_path = self.cache_dir / 'processed_urls.csv'
         self.processed_urls = {}
         self._load_processed_urls()
+        
+        # Create the log file if it doesn't exist
+        if not self.url_log_path.exists():
+            self.url_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.url_log_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['url', 'timestamp', 'status'])
 
     def _load_processed_urls(self):
         """Load processed URLs from log file."""
@@ -267,6 +274,17 @@ class ContentAnalyzer:
         safe_name = hashlib.sha256(url.encode()).hexdigest()
         return self.cache_dir / f"{safe_name}.json"
 
+    async def _log_processed_url(self, url: str, status: str) -> None:
+        """Log URL processing status with timestamp."""
+        timestamp = datetime.now(timezone.utc)
+        
+        # Only store successful URLs in the processed_urls cache
+        if status == 'success':
+            self.processed_urls[url] = timestamp
+        
+        async with aiofiles.open(self.url_log_path, 'a', newline='') as f:
+            await f.write(f"{url},{timestamp.isoformat()},{status}\n")
+
     async def _load_from_cache(self, cache_path: Path) -> Optional[PageContent]:
         """Load content from cache if available and not expired."""
         try:
@@ -280,11 +298,12 @@ class ContentAnalyzer:
             if not fetch_time.tzinfo:
                 fetch_time = fetch_time.replace(tzinfo=timezone.utc)
             
-            # Strict cache expiration check
+            # Check if cache has expired
             if (datetime.now(timezone.utc) - fetch_time) > self.cache_ttl:
                 logger.debug(f"Cache expired for {cache_data['url']}")
                 return None
                 
+            # Create PageContent from cache data
             return PageContent(
                 url=cache_data['url'],
                 title=cache_data.get('title'),
@@ -308,7 +327,7 @@ class ContentAnalyzer:
                 'content_type': content.content_type,
                 'status_code': content.status_code,
                 'error': content.error,
-                'fetch_time': datetime.now(timezone.utc).isoformat()
+                'fetch_time': content.fetch_time.isoformat() if content.fetch_time else datetime.now(timezone.utc).isoformat()
             }
             
             async with aiofiles.open(cache_path, 'w') as f:

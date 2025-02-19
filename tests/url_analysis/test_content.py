@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 import json
 from unittest.mock import Mock, patch
 from contextlib import asynccontextmanager
+import csv
 
 from gaiwan.twitter_archive_processor.url_analysis.content import ContentAnalyzer, PageContent
 from .test_utils import create_mock_response
@@ -295,6 +296,16 @@ async def test_cache_expiration(content_analyzer, tmp_path):
 @pytest.mark.asyncio
 async def test_url_processing_log(content_analyzer, tmp_path):
     """Test URL processing log functionality."""
+    # Set the cache directory for the test
+    content_analyzer.cache_dir = tmp_path
+    content_analyzer.url_log_path = tmp_path / 'processed_urls.csv'
+    
+    # Create the log file
+    content_analyzer.url_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(content_analyzer.url_log_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['url', 'timestamp', 'status'])
+    
     url = "https://example.com"
     
     # Test log initialization
