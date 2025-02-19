@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 import logging
 from typing import List, Dict
-from ..conversation import ConversationThread
+from ..core.conversation import ConversationThread
 from ..tweets.base import BaseTweet
 from .base import Exporter
 

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 
 from ..tweets.base import BaseTweet
-from ..conversation import ConversationThread
+from ..core.conversation import ConversationThread
 
 class Exporter(ABC):
     """Base class for archive exporters."""

@@ -17,7 +17,7 @@ import aiohttp
 from .metadata import URLMetadata
 from .domain import DomainNormalizer
 from .content import ContentAnalyzer, PageContent
-from ..config import Config
+from .apis.config import Config
 
 logger = logging.getLogger(__name__)
 

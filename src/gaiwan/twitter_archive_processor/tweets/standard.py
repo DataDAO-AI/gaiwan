@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Set
 from .base import BaseTweet
-from ..metadata import TweetMetadata
+from ..core.metadata import TweetMetadata
 
 class StandardTweet(BaseTweet):
     def __init__(

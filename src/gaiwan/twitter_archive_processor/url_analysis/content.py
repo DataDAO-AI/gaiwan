@@ -15,7 +15,7 @@ from tqdm import tqdm
 import ssl
 import gc
 from .apis.youtube import YouTubeAPI
-from ..config import Config
+from .apis.config import Config
 from .apis.github import GitHubAPI
 from .models import PageContent
 

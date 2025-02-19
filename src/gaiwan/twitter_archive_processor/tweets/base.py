@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Dict, Set, ClassVar
 
-from ..metadata import TweetMetadata
+from ..core.metadata import TweetMetadata
 
 @dataclass
 class BaseTweet(ABC):

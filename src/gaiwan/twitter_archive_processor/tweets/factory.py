@@ -3,7 +3,7 @@ from typing import Dict, Optional, Type
 
 from .base import BaseTweet
 from .types import StandardTweet, NoteTweet
-from ..metadata import TweetMetadata
+from ..core.metadata import TweetMetadata
 
 class TweetFactory:
     """Factory for creating different types of tweets."""

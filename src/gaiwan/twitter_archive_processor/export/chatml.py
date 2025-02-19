@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 
 from .oai import OpenAIExporter
 from ..tweets.base import BaseTweet
-from ..conversation import ConversationThread
+from ..core.conversation import ConversationThread
 from ..coretypes import Content
 
 logger = logging.getLogger(__name__)
