@@ -18,6 +18,7 @@ from .apis.youtube import YouTubeAPI
 from .apis.config import Config
 from .apis.github import GitHubAPI
 from .models import PageContent
+import csv
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,38 @@ class ContentAnalyzer:
         # self.youtube_api = YouTubeAPI(api_key=self.config.get_api_key('youtube')) if self.config.get_api_key('youtube') else None
         # self.github_api = GitHubAPI(api_key=self.config.get_api_key('github')) if self.config.get_api_key('github') else None
 
+        # Setup URL processing log
+        self.url_log_path = self.cache_dir / 'processed_urls.csv'
+        self._setup_url_log()
+        self.processed_urls = self._load_processed_urls()
+
+    def _setup_url_log(self):
+        """Initialize URL processing log if it doesn't exist."""
+        if not self.url_log_path.exists():
+            with open(self.url_log_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['url', 'timestamp', 'status'])
+
+    def _load_processed_urls(self) -> Dict[str, datetime]:
+        """Load previously processed URLs from log."""
+        processed = {}
+        if self.url_log_path.exists():
+            with open(self.url_log_path, 'r', newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row['status'] == 'success':
+                        processed[row['url']] = datetime.fromisoformat(row['timestamp'])
+        return processed
+
+    async def _log_processed_url(self, url: str, status: str):
+        """Log a processed URL with timestamp."""
+        timestamp = datetime.now(timezone.utc)
+        async with aiofiles.open(self.url_log_path, 'a', newline='') as f:
+            writer = csv.writer(f)
+            await f.write(f"{url},{timestamp.isoformat()},{status}\n")
+        if status == 'success':
+            self.processed_urls[url] = timestamp
+
     async def analyze_urls(self, urls: List[str], session: aiohttp.ClientSession, progress_callback=None) -> Dict[str, PageContent]:
         """Analyze multiple URLs concurrently with optional progress callback."""
         results = {}
@@ -141,11 +174,22 @@ class ContentAnalyzer:
 
     async def analyze_url(self, session: aiohttp.ClientSession, url: str) -> PageContent:
         """Analyze a single URL, using API if available."""
+        # Check if URL was recently processed
+        if url in self.processed_urls:
+            last_processed = self.processed_urls[url]
+            if datetime.now(timezone.utc) - last_processed < self.cache_ttl:
+                logger.debug(f"Skipping recently processed URL: {url}")
+                cache_path = self._get_cache_path(url)
+                cached_content = await self._load_from_cache(cache_path)
+                if cached_content:
+                    return cached_content
+
         cache_path = self._get_cache_path(url)
         
         # Check cache first
         cached_content = await self._load_from_cache(cache_path)
         if cached_content:
+            await self._log_processed_url(url, 'success')
             logger.debug(f"Cache hit for {url}")
             return cached_content
             
@@ -196,6 +240,7 @@ class ContentAnalyzer:
                             text = await response.text()
                             content = await self._parse_content(url, text, content.content_type)
                             await self._save_to_cache(cache_path, content)
+                            await self._log_processed_url(url, 'success')
                             return content
                         except UnicodeDecodeError:
                             content.error = "Text decode error"
@@ -213,6 +258,7 @@ class ContentAnalyzer:
                 await asyncio.sleep(1 * (attempt + 1))
             
         await self._save_to_cache(cache_path, content)
+        await self._log_processed_url(url, 'failed')
         return content
 
     async def _parse_content(self, url: str, content: str, content_type: str) -> PageContent:

@@ -7,7 +7,7 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 import functools
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 import orjson
 from tqdm import tqdm
@@ -257,11 +257,16 @@ class URLAnalyzer:
                                 'fragment': parsed.fragment
                             })
                 
-                # Process content for batch URLs
-                if batch_urls:
+                # Filter out already processed URLs
+                new_urls = {url for url in batch_urls 
+                          if url not in self.content_analyzer.processed_urls or 
+                          datetime.now(timezone.utc) - self.content_analyzer.processed_urls[url] > self.content_analyzer.cache_ttl}
+                
+                # Process content for new URLs only
+                if new_urls:
                     async with aiohttp.ClientSession() as session:
                         content_results = await self.content_analyzer.analyze_urls(
-                            list(batch_urls),
+                            list(new_urls),
                             session=session
                         )
                         
