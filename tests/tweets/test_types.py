@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, timezone
 from gaiwan.twitter_archive_processor.tweets.types import StandardTweet, NoteTweet
-from gaiwan.twitter_archive_processor.metadata import TweetMetadata
+from gaiwan.twitter_archive_processor.core.metadata import TweetMetadata
 
 @pytest.fixture
 def standard_tweet_data():
