@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 from datetime import datetime, timezone
 
-from .tweets.base import BaseTweet
+from ..tweets.base import BaseTweet
 
 @dataclass
 class ConversationThread:

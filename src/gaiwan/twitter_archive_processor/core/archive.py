@@ -5,12 +5,12 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import pandas as pd
 
-from .tweets.factory import TweetFactory
-from .tweets.base import BaseTweet
-from .url_analysis.analyzer import URLAnalyzer
+from ..tweets.factory import TweetFactory
+from ..tweets.base import BaseTweet
+from ..url_analysis.analyzer import URLAnalyzer
 from .metadata import TweetMetadata
 from .conversation import ConversationThread
-from .export.base import Exporter
+from ..export.base import Exporter
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +85,9 @@ class Archive:
     
     def export(self, format: str, output_path: Path, system_message: str = "You are a helpful assistant.") -> None:
         """Export the archive in various formats."""
-        from .export.markdown import MarkdownExporter
-        from .export.oai import OpenAIExporter
-        from .export.chatml import ChatMLExporter
+        from ..export.markdown import MarkdownExporter
+        from ..export.oai import OpenAIExporter
+        from ..export.chatml import ChatMLExporter
         
         EXPORTERS = {
             'markdown': MarkdownExporter,

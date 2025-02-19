@@ -1,7 +1,7 @@
 from pathlib import Path
 import argparse
 import logging
-from .processor import ArchiveProcessor
+from .core.processor import ArchiveProcessor
 
 def main():
     parser = argparse.ArgumentParser(description='Process Twitter archives')
