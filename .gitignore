@@ -44,3 +44,4 @@ output/
 # Twitter Archives
 archives/
 *_archive.json
+config.json

@@ -16,6 +16,7 @@ import gc
 from .apis.youtube import YouTubeAPI
 from .apis.config import Config
 from .apis.github import GitHubAPI
+from .apis.twitter import TwitterAPI
 from .models import PageContent
 import csv
 
@@ -68,7 +69,14 @@ class ContentAnalyzer:
 
         # Load config and initialize APIs
         self.config = config or Config()
+        
+        # Initialize APIs with keys from config
         self.youtube_api = YouTubeAPI(api_key=self.config.get_api_key('youtube')) if self.config.get_api_key('youtube') else None
+        self.twitter_api = TwitterAPI(
+            api_key=self.config.get_api_key('twitter_key'),
+            api_secret=self.config.get_api_key('twitter_secret'),
+            bearer_token=self.config.get_api_key('twitter_bearer')
+        ) if all(self.config.get_api_key(k) for k in ['twitter_key', 'twitter_secret', 'twitter_bearer']) else None
         self.github_api = GitHubAPI(api_key=self.config.get_api_key('github')) if self.config.get_api_key('github') else None
 
         # Setup URL processing log
@@ -152,20 +160,31 @@ class ContentAnalyzer:
             logger.debug(f"Cache hit for {url}")
             return cached_content
             
-        # Try API handlers
-        if self.youtube_api and ('youtube.com' in url or 'youtu.be' in url):
-            content = await self.youtube_api.process_url(url)
-            if content:
-                await self._save_to_cache(cache_path, content)
-                return content
-                
-        if self.github_api and 'github.com' in url:
-            content = await self.github_api.process_url(url)
-            if content:
-                await self._save_to_cache(cache_path, content)
-                return content
+        # Try API-specific handlers first
+        domain = urlparse(url).netloc.lower()
         
-        # Fall back to regular web scraping
+        if 'youtube.com' in domain or 'youtu.be' in domain:
+            if self.youtube_api:
+                content = await self.youtube_api.process_url(url)
+                if content:
+                    await self._save_to_cache(cache_path, content)
+                    return content
+                    
+        if 'twitter.com' in domain or 'x.com' in domain:
+            if self.twitter_api:
+                content = await self.twitter_api.process_url(url)
+                if content:
+                    await self._save_to_cache(cache_path, content)
+                    return content
+                    
+        if 'github.com' in domain:
+            if self.github_api:
+                content = await self.github_api.process_url(url)
+                if content:
+                    await self._save_to_cache(cache_path, content)
+                    return content
+        
+        # Fall back to regular web scraping if no API available
         logger.debug(f"Cache miss for {url}")
         content = PageContent(url=url)
         for attempt in range(3):
