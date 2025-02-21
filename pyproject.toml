@@ -53,12 +53,12 @@ source = ["gaiwan"]
 omit = ["tests/*"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "--asyncio-mode=auto"
 markers = [
-    "slow: mark test as slow running",
-    "timeout: mark test to timeout after X seconds"
+    "asyncio: mark test as async",
 ]
-asyncio_mode = "strict"
-asyncio_default_fixture_loop_scope = "function"
 
 [tool.setuptools]
 packages = ["gaiwan"]

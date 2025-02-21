@@ -9,6 +9,10 @@ This package provides a comprehensive framework for analyzing URLs found in Twit
   - Resolves shortened URLs (t.co, bit.ly, etc.)
   - Normalizes domains for consistent analysis
   - Concurrent content fetching and analysis
+- API Integration:
+  - YouTube Data API v3 for video metadata
+  - Twitter/X API v2 for tweet content
+  - GitHub API for repository information
 - Content analysis:
   - Page title and description extraction
   - Link and image counting
@@ -181,6 +185,35 @@ skip_content_types = {
     'application/octet-stream'
 }
 ```
+
+### API Keys
+The package supports multiple APIs for enhanced metadata extraction. Create a config file at `~/.config/twitter_archive_processor/config.json`:
+
+```json
+{
+    "api_keys": {
+        "youtube": "YOUR_YOUTUBE_API_KEY",
+        "twitter_key": "YOUR_TWITTER_API_KEY",
+        "twitter_secret": "YOUR_TWITTER_API_SECRET",
+        "twitter_bearer": "YOUR_TWITTER_BEARER_TOKEN",
+        "github": "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN"
+    }
+}
+```
+
+### API Features
+- YouTube:
+  - Enhanced video metadata
+  - Channel information
+  - View counts and statistics
+- Twitter/X:
+  - Full tweet content
+  - Author information
+  - Engagement metrics
+- GitHub:
+  - Repository metadata
+  - README content
+  - Star/fork counts
 
 ## URL Processing Log
 
