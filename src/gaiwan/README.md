@@ -24,6 +24,16 @@ A comprehensive framework for analyzing Twitter/X archives, with support for mul
   - Version tracking
   - Migration support
   - Validation rules
+- Identity Management:
+  - User ID tracking
+  - Username history tracking
+  - Display name changes
+  - Avatar tracking
+  - Historical identity querying
+  - Cross-archive identity merging
+  - Point-in-time identity lookup
+  - Temporary ID generation
+  - Bidirectional mappings
 
 ## Installation
 

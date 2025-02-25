@@ -1,6 +1,6 @@
 from pathlib import Path
 import logging
-from typing import List, Dict, Type
+from typing import List, Dict, Type, Optional
 import pandas as pd
 import json
 
@@ -10,6 +10,7 @@ from ..export.chatml import ChatMLExporter
 from ..export.markdown import MarkdownExporter
 from .archive import Archive
 from ..url_analyzer import URLAnalyzer
+from ..identity import UserIdentityManager, IdentityChangeTracker
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,12 @@ class ArchiveProcessor:
         self.archive_dir = archive_dir
         self.archives: List[Archive] = []
         self.url_analyzer = URLAnalyzer()
+        # Add centralized identity tracking
+        self.identity_manager = UserIdentityManager()
+        self.identity_tracker = IdentityChangeTracker()
         
     def load_archives(self) -> None:
-        """Load all archives from the directory."""
+        """Load all archives and track identities across them"""
         if not self.archive_dir.exists():
             logger.error(f"Archive directory does not exist: {self.archive_dir}")
             return
@@ -37,6 +41,27 @@ class ArchiveProcessor:
             try:
                 archive = Archive(archive_file)
                 archive.load()
+                
+                # Merge identity tracking from individual archives
+                if archive.identity_manager._users:
+                    for user_id, user in archive.identity_manager._users.items():
+                        if not self.identity_manager.get_user(user_id):
+                            self.identity_manager.add_user(
+                                username=user.username,
+                                user_id=user_id
+                            )
+                
+                # Merge identity changes
+                for user_id, changes in archive.identity_tracker._changes.items():
+                    for change in changes:
+                        self.identity_tracker.record_identity_change(
+                            user_id=change.user_id,
+                            username=change.username,
+                            display_name=change.display_name,
+                            avatar_url=change.avatar_url,
+                            timestamp=change.timestamp
+                        )
+                
                 self.archives.append(archive)
             except Exception as e:
                 logger.error(f"Failed to load archive {archive_file}: {e}")
@@ -111,3 +136,24 @@ class ArchiveProcessor:
             threads = archive.get_conversation_threads()
             for thread in threads:
                 exporter.export_thread(thread, output_path)
+
+    def get_user_identity_history(self, username: Optional[str] = None, 
+                                user_id: Optional[str] = None) -> pd.DataFrame:
+        """Get identity history for a user as a DataFrame"""
+        if username and not user_id:
+            user_id = self.identity_manager.get_user_id_from_username(username)
+        
+        if not user_id:
+            return pd.DataFrame()
+            
+        changes = self.identity_tracker._changes.get(user_id, [])
+        return pd.DataFrame([
+            {
+                'user_id': c.user_id,
+                'timestamp': c.timestamp,
+                'username': c.username,
+                'display_name': c.display_name,
+                'avatar_url': c.avatar_url
+            }
+            for c in changes
+        ])

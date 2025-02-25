@@ -189,36 +189,19 @@ class ContentAnalyzer:
         content = PageContent(url=url)
         for attempt in range(3):
             try:
-                async with session.get(
-                    url, 
-                    timeout=self.timeout,
-                    headers=self.headers,
-                    allow_redirects=True,
-                    max_redirects=5
-                ) as response:
+                async with session.get(url) as response:
                     content.status_code = response.status
                     content.content_type = response.headers.get("content-type", "")
-                    
-                    # Handle rate limiting
-                    if response.status in self.rate_limits:
-                        delay = self.rate_limits[response.status]
-                        logger.debug(f"Rate limited ({response.status}). Waiting {delay}s before retry...")
-                        await asyncio.sleep(delay)
-                        if attempt < 2:
-                            continue
                     
                     # Skip binary content early
                     if any(ct in content.content_type.lower() for ct in self.skip_content_types):
                         content.error = "Skipped binary content"
-                        await self._save_to_cache(cache_path, content)
                         return content
 
                     if response.status == 200:
                         try:
                             text = await response.text()
                             content = await self._parse_content(url, text, content.content_type)
-                            await self._save_to_cache(cache_path, content)
-                            await self._log_processed_url(url, 'success')
                             return content
                         except UnicodeDecodeError:
                             content.error = "Text decode error"

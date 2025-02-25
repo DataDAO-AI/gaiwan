@@ -59,6 +59,12 @@ twitter_archive_processor/
   - JSONL (line-delimited JSON)
   - ChatML (OpenAI chat format)
   - OpenAI format (training data)
+  - Identity tracking:
+  - User ID management
+  - Username history
+  - Display name changes
+  - Avatar tracking
+  - Historical identity querying
 
 ## Installation
 
@@ -85,6 +91,9 @@ processor.export_all("chatml", Path("output/chatml"))
 # Analyze URLs
 url_analysis = processor.analyze_urls()
 ```
+# Track identity changes
+identity_history = processor.get_user_identity_history(username="example_user")
+print(identity_history.to_string())
 
 ## Architecture
 

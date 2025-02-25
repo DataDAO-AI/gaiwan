@@ -11,6 +11,8 @@ from ..url_analysis.analyzer import URLAnalyzer
 from .metadata import TweetMetadata
 from .conversation import ConversationThread
 from ..export.base import Exporter
+from ..identity import UserIdentityManager, IdentityChangeTracker
+from ..identity.models import UserIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +21,14 @@ class Archive:
     
     def __init__(self, file_path: Path):
         self.file_path = file_path
-        self.archive_path = file_path  # Add this for backward compatibility
+        self.archive_path = file_path
         self.username = None
         self.tweets = []
         self.metadata = {}
         self.url_analyzer = URLAnalyzer(archive_dir=None)
+        # Add identity tracking
+        self.identity_manager = UserIdentityManager()
+        self.identity_tracker = IdentityChangeTracker()
         
     def load(self) -> None:
         """Load archive data from file."""
@@ -31,10 +36,27 @@ class Archive:
             with open(self.file_path) as f:
                 data = json.load(f)
                 
-            # Load account info
+            # Load account info and track identity
             if 'account' in data and data['account']:
                 account_data = data['account'][0].get('account', {})
                 self.username = account_data.get('username')
+                user_id = account_data.get('accountId')
+                
+                # Track initial identity
+                if self.username:
+                    user = self.identity_manager.add_user(
+                        username=self.username,
+                        user_id=user_id
+                    )
+                    
+                    # Record initial identity state
+                    self.identity_tracker.record_identity_change(
+                        user_id=user.user_id,
+                        username=self.username,
+                        display_name=account_data.get('accountDisplayName', self.username),
+                        timestamp=datetime.now()
+                    )
+                
                 self.metadata['account'] = account_data
 
             # Load tweets
