@@ -14,7 +14,8 @@ dependencies = [
     "beautifulsoup4",
     "tqdm",
     "orjson",
-    "aiofiles"
+    "aiofiles",
+    "duckdb"
 ]
 
 [project.optional-dependencies]
