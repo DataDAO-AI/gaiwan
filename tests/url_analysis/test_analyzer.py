@@ -77,17 +77,10 @@ def test_analyze_archive(analyzer, temp_archive_dir, sample_tweet_data):
 
 @pytest.mark.asyncio
 async def test_analyze_archives(analyzer, temp_archive_dir, sample_tweet_data):
+    """Test processing archives sequentially while maintaining URL deduplication."""
     # Create archive files with sample data
     archive1 = create_archive_file(temp_archive_dir, "user1", [sample_tweet_data])
     archive2 = create_archive_file(temp_archive_dir, "user2", [sample_tweet_data])
-    
-    # Reinitialize analyzer to pick up the new files
-    analyzer = URLAnalyzer(archive_dir=temp_archive_dir)
-    
-    # Verify archives were found
-    assert len(analyzer.archives) == 2
-    assert archive1 in analyzer.archives
-    assert archive2 in analyzer.archives
     
     # Create mock content for each URL in sample_tweet_data
     mock_contents = {
@@ -103,18 +96,58 @@ async def test_analyze_archives(analyzer, temp_archive_dir, sample_tweet_data):
         )
     }
     
-    async def mock_analyze(*args, **kwargs):
-        return mock_contents
+    processed_urls = set()
     
-    with patch('gaiwan.twitter_archive_processor.url_analysis.content.ContentAnalyzer.analyze_urls', 
-               new=mock_analyze):
+    async def mock_analyze_archive_urls(archive_name, urls, *args, **kwargs):
+        # Track which URLs are processed for each archive
+        nonlocal processed_urls
+        result = {}
+        for url in urls:
+            if url in mock_contents:
+                result[url] = mock_contents[url]
+                processed_urls.add(url)
+        return result
+    
+    with patch('gaiwan.twitter_archive_processor.url_analysis.content.ContentAnalyzer.analyze_archive_urls', 
+               side_effect=mock_analyze_archive_urls):
         df = await analyzer._analyze_archives_async()
+        
+        # Verify sequential processing
         assert isinstance(df, pd.DataFrame)
         assert not df.empty
-        assert len(df) == 2  # Should have both URLs
-        assert set(df['url'].values) == {"https://example.com", "https://longurl.com/page"}
+        assert len(df) == 4  # 2 URLs × 2 archives
+        
+        # Verify URL deduplication
+        assert len(processed_urls) == 2  # Each unique URL should be processed only once
+        assert df['url'].nunique() == 2
+        
+        # Verify archive context is maintained
+        assert set(df['username'].unique()) == {"user1", "user2"}
         assert all(df['content_type'] == "text/html")
-        assert set(df['title'].values) == {"Test Page 1", "Test Page 2"}
+        assert set(df['title'].unique()) == {"Test Page 1", "Test Page 2"}
+
+@pytest.mark.asyncio
+async def test_archive_sequential_processing(analyzer, temp_archive_dir, sample_tweet_data):
+    """Test that archives are processed one at a time."""
+    # Create multiple archive files
+    archives = [
+        create_archive_file(temp_archive_dir, f"user{i}", [sample_tweet_data])
+        for i in range(3)
+    ]
+    
+    processing_order = []
+    
+    async def mock_analyze_archive_urls(archive_name, urls, *args, **kwargs):
+        processing_order.append(archive_name)
+        return {}
+    
+    with patch('gaiwan.twitter_archive_processor.url_analysis.content.ContentAnalyzer.analyze_archive_urls', 
+               side_effect=mock_analyze_archive_urls):
+        await analyzer._analyze_archives_async()
+        
+        # Verify archives were processed sequentially
+        assert len(processing_order) == 3
+        assert processing_order == sorted(processing_order)  # Archives processed in order
 
 def test_url_resolution(analyzer):
     with patch('requests.Session.head') as mock_head:

@@ -44,19 +44,19 @@ When updating this TODO list:
   - [ ] Consider thread categorization
 
 ## User Identity & Graph Features
-- [ ] User ID Implementation
+- [x] User ID Implementation
   - [x] Switch to user ID as primary key (src/gaiwan/twitter_archive_processor/tweets/base.py, lines 8-16)
   - [x] Find user ID field in archive schemas (src/gaiwan/canonicalize.py, lines 113-148)
-  - [ ] Update username-based lookups to use IDs
-  - [ ] Create ID->username mappings
-  - [ ] Handle missing user ID cases
+  - [x] Update username-based lookups to use IDs (src/gaiwan/twitter_archive_processor/identity/models.py, lines 15-42)
+  - [x] Create ID->username mappings (src/gaiwan/twitter_archive_processor/identity/manager.py, lines 25-48)
+  - [x] Handle missing user ID cases (src/gaiwan/twitter_archive_processor/identity/manager.py, lines 51-72)
 
-- [ ] Identity Change Tracking
-  - [ ] Build timeline of username changes
-  - [ ] Track display name changes
-  - [ ] Store avatar/profile pic history
-  - [ ] Add API to query historical identities
-  - [ ] Implement change detection logic
+- [x] Identity Change Tracking
+  - [x] Build timeline of username changes (src/gaiwan/twitter_archive_processor/identity/tracker.py, lines 45-68)
+  - [x] Track display name changes (src/gaiwan/twitter_archive_processor/identity/tracker.py, lines 71-94)
+  - [x] Store avatar/profile pic history (src/gaiwan/twitter_archive_processor/identity/tracker.py, lines 97-120)
+  - [x] Add API to query historical identities (src/gaiwan/twitter_archive_processor/identity/tracker.py, lines 123-156)
+  - [x] Implement change detection logic (src/gaiwan/twitter_archive_processor/identity/tracker.py, lines 159-192)
 
 ## Persona Generation
 - [ ] Data Aggregation
@@ -106,7 +106,7 @@ When updating this TODO list:
 - [x] Basic API documentation (src/gaiwan/twitter_archive_processor/url_analysis/README.md, lines 40-78)
 - [x] CLI documentation (src/gaiwan/twitter_archive_processor/url_analysis/README.md, lines 28-38)
 - [ ] Additional Testing
-  - [ ] Add identity resolution tests
+  - [x] Add identity resolution tests
   - [ ] Create performance benchmarks
   - [ ] Add schema validation tests
   - [ ] Implement integration tests

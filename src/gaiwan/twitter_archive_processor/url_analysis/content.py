@@ -91,6 +91,8 @@ class ContentAnalyzer:
                 writer = csv.writer(f)
                 writer.writerow(['url', 'timestamp', 'status'])
 
+        self.archive_stats = {}  # Track stats per archive
+
     def _load_processed_urls(self):
         """Load processed URLs from log file."""
         if not self.url_log_path.exists():
@@ -345,3 +347,59 @@ class ContentAnalyzer:
             return all([result.scheme, result.netloc])
         except Exception:
             return False 
+
+    async def analyze_archive_urls(self, archive_name: str, urls: List[str], 
+                                 session: Optional[aiohttp.ClientSession] = None,
+                                 progress_callback=None) -> Dict[str, PageContent]:
+        """Analyze URLs from a specific archive."""
+        if session is None:
+            async with aiohttp.ClientSession() as new_session:
+                return await self._analyze_archive_urls_internal(archive_name, urls, new_session, progress_callback)
+        return await self._analyze_archive_urls_internal(archive_name, urls, session, progress_callback)
+
+    async def _analyze_archive_urls_internal(self, archive_name: str, urls: List[str], 
+                                          session: aiohttp.ClientSession,
+                                          progress_callback=None) -> Dict[str, PageContent]:
+        """Process URLs from a specific archive in batches."""
+        results = {}
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        
+        # Initialize stats for this archive
+        self.archive_stats[archive_name] = {
+            'total_urls': len(urls),
+            'processed': 0,
+            'cached': 0,
+            'errors': 0
+        }
+        
+        for i in range(0, len(urls), self.batch_size):
+            batch = urls[i:i + self.batch_size]
+            batch_results = await self._process_archive_batch(archive_name, batch, session, semaphore, progress_callback)
+            results.update(batch_results)
+            
+            # Update archive stats
+            self.archive_stats[archive_name]['processed'] += len(batch)
+            
+            # Optional garbage collection after each batch
+            gc.collect()
+            
+        return results
+
+    async def _process_archive_batch(self, archive_name: str, urls: List[str],
+                                   session: aiohttp.ClientSession,
+                                   semaphore: asyncio.Semaphore,
+                                   progress_callback) -> Dict[str, PageContent]:
+        """Process a batch of URLs from a specific archive."""
+        results = {}
+        
+        async def process_url_with_semaphore(url: str):
+            async with semaphore:
+                result = await self.analyze_url(session, url)
+                results[url] = result
+                if progress_callback:
+                    progress_callback(1)
+                return result
+        
+        tasks = [process_url_with_semaphore(url) for url in urls]
+        await asyncio.gather(*tasks)
+        return results 

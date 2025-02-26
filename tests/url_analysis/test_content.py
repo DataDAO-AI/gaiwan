@@ -470,4 +470,48 @@ async def test_api_fallback(content_analyzer, test_session):
     content_analyzer.max_retries = 0
     
     result = await content_analyzer.analyze_url(session, youtube_url)
-    assert result.title == "Fallback Title" 
+    assert result.title == "Fallback Title"
+
+@pytest.mark.asyncio
+async def test_url_deduplication_across_archives(content_analyzer, tmp_path):
+    """Test URL deduplication across multiple archives."""
+    content_analyzer.cache_dir = tmp_path
+    url = "https://example.com"
+    
+    # Mock successful response
+    mock_response = AsyncMockResponse("<html><title>Test</title></html>")
+    
+    # Track number of actual HTTP requests
+    request_count = 0
+    
+    class MockSession:
+        async def get(self, *args, **kwargs):
+            nonlocal request_count
+            request_count += 1
+            return mock_response
+        
+        async def __aenter__(self):
+            return self
+            
+        async def __aexit__(self, *args):
+            pass
+    
+    session = MockSession()
+    
+    # Process same URL in different archives
+    archives = ["archive1", "archive2", "archive3"]
+    for archive in archives:
+        result = await content_analyzer.analyze_archive_urls(
+            archive,
+            [url],
+            session=session
+        )
+        assert url in result
+        assert result[url].title == "Test"
+    
+    # Verify URL was only fetched once
+    assert request_count == 1
+    
+    # Verify URL was cached
+    cache_path = content_analyzer._get_cache_path(url)
+    assert cache_path.exists() 

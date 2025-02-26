@@ -94,24 +94,42 @@ def setup_logging(debug: bool):
         debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logging.getLogger().addHandler(debug_handler)
 
-async def process_archives(analyzer: URLAnalyzer, output_file: Path, force: bool = False) -> Optional[pd.DataFrame]:
-    """Process archives and return combined DataFrame."""
-    existing_df = None if force else load_existing_data(output_file)
-    
-    if existing_df is not None:
-        processed_archives = set(existing_df['username'].unique())
-        logger.info(f"Found {len(processed_archives)} processed archives")
-    else:
-        processed_archives = set()
-    
-    new_df = await analyzer._analyze_archives_async()
-    
-    if existing_df is not None and not new_df.empty:
-        new_df = pd.concat([existing_df, new_df], ignore_index=True)
-    
-    if not new_df.empty:
-        save_results(new_df, output_file)
-    return new_df
+async def process_archives(analyzer, output_file: Path, force: bool = False,
+                         archive_progress_callback=None,
+                         url_progress_callback=None) -> Optional[pd.DataFrame]:
+    """Process archives with two-level progress reporting."""
+    if not force and (existing_df := load_existing_data(output_file)) is not None:
+        return existing_df
+        
+    # Set up progress bars
+    total_archives = len(list(analyzer.archive_dir.glob("*.json")))
+    with tqdm(total=total_archives, desc="Processing archives", position=0) as archive_pbar:
+        def update_archive_progress(archive_name: str, current: int, total: int):
+            archive_pbar.set_description(f"Processing archive: {archive_name}")
+            archive_pbar.update(1)
+            if archive_progress_callback:
+                archive_progress_callback(archive_name, current, total)
+        
+        url_pbar = tqdm(desc="Processing URLs", position=1, leave=False)
+        def update_url_progress(archive_name: str, processed: int, total: int):
+            url_pbar.total = total
+            url_pbar.n = processed
+            url_pbar.refresh()
+            if url_progress_callback:
+                url_progress_callback(archive_name, processed, total)
+        
+        try:
+            df = await analyzer._analyze_archives_async(
+                archive_progress_callback=update_archive_progress,
+                url_progress_callback=update_url_progress
+            )
+            
+            if df is not None and not df.empty:
+                save_results(df, output_file)
+            return df
+            
+        finally:
+            url_pbar.close()
 
 async def main():
     parser = argparse.ArgumentParser(description="Analyze URLs in Twitter archives")

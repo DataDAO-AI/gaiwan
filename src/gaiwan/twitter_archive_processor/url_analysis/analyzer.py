@@ -48,6 +48,8 @@ class URLAnalyzer:
             logger.debug(f"Found {len(self.archives)} archive files in {self.archive_dir}")
         
         self.batch_size = 100  # Number of URLs to process at once
+        self.processed_archives = set()  # Track which archives have been processed
+        self.archive_results = {}  # Store results per archive
 
     def _setup_url_pattern(self):
         """Initialize URL matching pattern."""
@@ -375,6 +377,110 @@ class URLAnalyzer:
         except Exception as e:
             logger.error(f"Error extracting URLs from {archive_path}: {e}")
             return set()
+
+    async def process_archive(self, archive_path: Path) -> pd.DataFrame:
+        """Process a single archive file."""
+        archive_name = archive_path.stem
+        if archive_name in self.processed_archives:
+            logger.info(f"Skipping already processed archive: {archive_name}")
+            return pd.DataFrame()
+            
+        logger.info(f"Processing archive: {archive_name}")
+        
+        # Extract URLs and contexts from archive
+        archive_data = self._extract_archive_data(archive_path)
+        if not archive_data:
+            return pd.DataFrame()
+            
+        # Process URLs for this archive
+        async with aiohttp.ClientSession() as session:
+            content_results = await self.content_analyzer.analyze_archive_urls(
+                archive_name,
+                list(archive_data.keys()),
+                session=session,
+                progress_callback=self._update_progress
+            )
+            
+        # Create DataFrame entries
+        url_data = []
+        for url, content in content_results.items():
+            for context in archive_data[url]:
+                url_data.append(self._create_url_entry(url, content, context))
+                
+        self.processed_archives.add(archive_name)
+        df = pd.DataFrame(url_data)
+        self.archive_results[archive_name] = df
+        return df
+        
+    def _extract_archive_data(self, archive_path: Path) -> Dict[str, List[dict]]:
+        """Extract URLs and their contexts from an archive file."""
+        archive_data = {}
+        username = archive_path.stem.replace('_archive', '')
+        
+        try:
+            with open(archive_path, 'rb') as f:
+                data = orjson.loads(f.read())
+                
+            for tweet_data in data.get('tweets', []):
+                if 'tweet' in tweet_data:
+                    tweet = tweet_data['tweet']
+                    context = self._create_tweet_context(tweet, username)
+                    
+                    urls = self.extract_urls_from_tweet(tweet)
+                    for url in urls:
+                        if url not in archive_data:
+                            archive_data[url] = []
+                        archive_data[url].append(context)
+                        
+        except Exception as e:
+            logger.error(f"Error processing archive {archive_path}: {e}")
+            return {}
+            
+        return archive_data
+        
+    def _create_tweet_context(self, tweet: dict, username: str) -> dict:
+        """Create context dictionary for a tweet."""
+        return {
+            'username': username,
+            'tweet_id': tweet.get('id_str'),
+            'tweet_created_at': datetime.strptime(
+                tweet.get('created_at', ''), 
+                "%a %b %d %H:%M:%S %z %Y"
+            ) if tweet.get('created_at') else None
+        }
+        
+    def _create_url_entry(self, url: str, content: PageContent, context: dict) -> dict:
+        """Create a dictionary entry for a URL."""
+        parsed = urlparse(url)
+        return {
+            **context,
+            'url': url,
+            'domain': self.domain_normalizer.normalize(parsed.netloc),
+            'raw_domain': parsed.netloc,
+            'protocol': parsed.scheme,
+            'path': parsed.path,
+            'query': parsed.query,
+            'fragment': parsed.fragment,
+            'title': content.title,
+            'description': content.description,
+            'content_type': content.content_type,
+            'status_code': content.status_code,
+            'error': content.error
+        }
+        
+    def get_archive_stats(self) -> pd.DataFrame:
+        """Get statistics about processed archives."""
+        stats = []
+        for archive_name, df in self.archive_results.items():
+            stats.append({
+                'archive': archive_name,
+                'total_urls': len(df),
+                'unique_urls': df['url'].nunique(),
+                'domains': df['domain'].nunique(),
+                'success_rate': (df['status_code'] == 200).mean(),
+                'error_rate': df['error'].notna().mean()
+            })
+        return pd.DataFrame(stats)
 
 
     
