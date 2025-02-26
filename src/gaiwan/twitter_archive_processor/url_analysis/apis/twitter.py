@@ -14,6 +14,12 @@ class TwitterAPI:
     api_key: str
     api_secret: str
     bearer_token: str
+    enabled: bool = False  # Disabled by default
+    
+    def __post_init__(self):
+        if not self.enabled:
+            logger.warning("Twitter API is disabled by default to avoid costs. "
+                         "Set enabled=True when initializing TwitterAPI to enable.")
     
     def extract_tweet_id(self, url: str) -> Optional[str]:
         """Extract tweet ID from Twitter/X URL."""
@@ -29,6 +35,9 @@ class TwitterAPI:
     
     async def get_tweet_info(self, tweet_id: str) -> Optional[PageContent]:
         """Get tweet metadata using Twitter API v2."""
+        if not self.enabled:
+            return None
+            
         url = f"https://api.twitter.com/2/tweets/{tweet_id}"
         headers = {
             'Authorization': f'Bearer {self.bearer_token}',
@@ -57,6 +66,9 @@ class TwitterAPI:
     
     async def process_url(self, url: str) -> Optional[PageContent]:
         """Process a Twitter/X URL and return page content."""
+        if not self.enabled:
+            return None
+            
         if tweet_id := self.extract_tweet_id(url):
             return await self.get_tweet_info(tweet_id)
         return None 
