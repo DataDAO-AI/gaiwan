@@ -43,5 +43,6 @@ output/
 
 # Twitter Archives
 archives/
+checkpoints/
 *_archive.json
 config.json
