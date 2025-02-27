@@ -437,16 +437,31 @@ class URLAnalyzer:
             return pd.DataFrame()
 
     def analyze_archives(self) -> pd.DataFrame:
-        """Analyze all archives and return a DataFrame."""
-        archives = list(self.archive_dir.glob("*_archive.json"))
-        logger.info(f"Found {len(archives)} archives to analyze")
-        
-        # Process each archive and collect DataFrames
+        """Analyze URLs across all archives in the directory."""
         dfs = []
-        for archive in tqdm(archives, desc="Analyzing archives"):
-            df = self.analyze_archive(archive)
-            if not df.empty:
-                dfs.append(df)
+        archives = list(self.archive_dir.glob("*_archive.json"))
+        
+        # Main progress bar for archives
+        with tqdm(total=len(archives), desc="Analyzing archives") as archive_pbar:
+            for archive_path in archives:
+                username = archive_path.stem.replace('_archive', '')
+                archive_pbar.set_description(f"Analyzing archive: {username}")
+                
+                # Extract tweet count first to set up inner progress bar
+                try:
+                    with open(archive_path, 'rb') as f:
+                        data = orjson.loads(f.read())
+                    tweets = data.get('tweets', [])
+                    
+                    # Inner progress bar for tweets/URLs within the current archive
+                    with tqdm(total=len(tweets), desc=f"Processing tweets", leave=False) as tweet_pbar:
+                        df = self._analyze_archive_with_progress(archive_path, tweet_pbar)
+                        if not df.empty:
+                            dfs.append(df)
+                except Exception as e:
+                    logger.error(f"Error processing {archive_path}: {e}")
+                
+                archive_pbar.update(1)
         
         # Combine all DataFrames
         if dfs:
@@ -454,6 +469,50 @@ class URLAnalyzer:
             logger.info(f"\nAnalysis complete. DataFrame shape: {combined_df.shape}")
             return combined_df
         return pd.DataFrame()
+
+    def _analyze_archive_with_progress(self, archive_path: Path, progress_bar: tqdm) -> pd.DataFrame:
+        """Analyze URLs in a single archive file with progress tracking."""
+        try:
+            with open(archive_path, 'rb') as f:
+                data = orjson.loads(f.read())
+            
+            url_data = []
+            username = archive_path.stem.replace('_archive', '')
+            
+            # Process tweets section
+            for tweet_data in data.get('tweets', []):
+                if 'tweet' in tweet_data:
+                    tweet = tweet_data['tweet']
+                    tweet_id = tweet.get('id_str')
+                    created_at = datetime.strptime(
+                        tweet.get('created_at', ''), 
+                        "%a %b %d %H:%M:%S %z %Y"
+                    ) if tweet.get('created_at') else None
+                    
+                    urls = self.extract_urls_from_tweet(tweet)
+                    for url in urls:
+                        parsed = urlparse(url)
+                        url_data.append({
+                            'username': username,
+                            'tweet_id': tweet_id,
+                            'tweet_created_at': created_at,
+                            'url': url,
+                            'domain': self.normalize_domain(parsed.netloc),
+                            'raw_domain': parsed.netloc,
+                            'protocol': parsed.scheme,
+                            'path': parsed.path,
+                            'query': parsed.query,
+                            'fragment': parsed.fragment
+                        })
+                
+                # Update progress after each tweet
+                progress_bar.update(1)
+            
+            return pd.DataFrame(url_data)
+            
+        except Exception as e:
+            logger.error(f"Error processing {archive_path}: {e}")
+            return pd.DataFrame()
 
 def main():
     """Command-line interface for URL analysis.
