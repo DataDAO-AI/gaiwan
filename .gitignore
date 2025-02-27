@@ -34,15 +34,25 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
+.coverage
+.env
+.venv/
+venv/
+
+# Project specific
+twitter_archives/
+archives/
+checkpoints/
+output/
+*_archive.json
+config.json
+
+# System files
+.DS_Store
+.*
 
 # Keep gaiwan package files
 !gaiwan/
 !gaiwan/__init__.py
 !gaiwan/mixpr.py
-output/
-
-# Twitter Archives
-archives/
-checkpoints/
-*_archive.json
-config.json
