@@ -441,8 +441,25 @@ class URLAnalyzer:
         dfs = []
         archives = list(self.archive_dir.glob("*_archive.json"))
         
+        # Configure logging to work with tqdm
+        # Create a custom logger that writes above the progress bars
+        class TqdmLoggingHandler(logging.Handler):
+            def emit(self, record):
+                try:
+                    msg = self.format(record)
+                    tqdm.write(msg)
+                    self.flush()
+                except Exception:
+                    self.handleError(record)
+        
+        # Replace all handlers with our custom handler
+        logger = logging.getLogger()
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+        logger.addHandler(TqdmLoggingHandler())
+        
         # Main progress bar for archives
-        with tqdm(total=len(archives), desc="Analyzing archives") as archive_pbar:
+        with tqdm(total=len(archives), desc="Analyzing archives", position=0) as archive_pbar:
             for archive_path in archives:
                 username = archive_path.stem.replace('_archive', '')
                 archive_pbar.set_description(f"Analyzing archive: {username}")
@@ -454,12 +471,16 @@ class URLAnalyzer:
                     tweets = data.get('tweets', [])
                     
                     # Inner progress bar for tweets/URLs within the current archive
-                    with tqdm(total=len(tweets), desc=f"Processing tweets", leave=False) as tweet_pbar:
+                    # Position=1 ensures it appears below the archive progress bar
+                    with tqdm(total=len(tweets), desc=f"Processing tweets", position=1, leave=True) as tweet_pbar:
                         df = self._analyze_archive_with_progress(archive_path, tweet_pbar)
                         if not df.empty:
                             dfs.append(df)
                 except Exception as e:
                     logger.error(f"Error processing {archive_path}: {e}")
+                
+                # Clear the tweet progress bar after finishing each archive
+                print("\033[1A\033[K", end="")  # Move up one line and clear it
                 
                 archive_pbar.update(1)
         
@@ -478,9 +499,10 @@ class URLAnalyzer:
             
             url_data = []
             username = archive_path.stem.replace('_archive', '')
+            tweets = data.get('tweets', [])
             
             # Process tweets section
-            for tweet_data in data.get('tweets', []):
+            for i, tweet_data in enumerate(tweets):
                 if 'tweet' in tweet_data:
                     tweet = tweet_data['tweet']
                     tweet_id = tweet.get('id_str')
@@ -507,6 +529,9 @@ class URLAnalyzer:
                 
                 # Update progress after each tweet
                 progress_bar.update(1)
+                # Update description occasionally to show URL count
+                if i % 100 == 0:
+                    progress_bar.set_description(f"Processing tweets ({len(url_data)} URLs found)")
             
             return pd.DataFrame(url_data)
             
