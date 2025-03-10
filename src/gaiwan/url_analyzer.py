@@ -373,10 +373,11 @@ class URLAnalyzer:
             
             url_data = []
             username = archive_path.stem.replace('_archive', '')
+            tweets = data.get('tweets', [])
             
-            # Process tweets section
-            for section in ['tweets', 'community-tweet', 'note-tweet']:
-                for tweet_data in data.get(section, []):
+            # Add progress bar for tweets within this archive
+            with tqdm(total=len(tweets), desc="Processing tweets", position=1, leave=False) as tweet_pbar:
+                for tweet_data in tweets:
                     if 'tweet' in tweet_data:
                         tweet = tweet_data['tweet']
                         tweet_id = tweet.get('id_str')
@@ -388,47 +389,42 @@ class URLAnalyzer:
                         urls = self.extract_urls_from_tweet(tweet)
                         for url in urls:
                             parsed = urlparse(url)
-                            raw_domain = parsed.netloc
-                            # If it's a shortened URL that failed to resolve, mark as unresolved
-                            is_resolved = not (raw_domain in self.shortener_domains)
-                            
-                            # Check if it's a Twitter internal link
-                            is_twitter_internal = bool(re.match(
-                                r'https?://(?:(?:www\.|m\.)?twitter\.com|x\.com)/\w+/status/',
-                                url
-                            ))
-                            
-                            # Get the page metadata if:
-                            # 1. It's not a shortened URL or was resolved successfully
-                            # 2. It's not a Twitter internal link
-                            metadata = None
-                            if is_resolved and not is_twitter_internal:
-                                metadata = self.get_page_metadata(url)
-                            elif is_twitter_internal:
-                                # Create metadata object but mark as skipped for Twitter internal links
-                                metadata = PageMetadata(url)
-                                metadata.mark_skipped("Twitter internal link")
-                            
                             url_data.append({
                                 'username': username,
                                 'tweet_id': tweet_id,
                                 'tweet_created_at': created_at,
                                 'url': url,
                                 'domain': self.normalize_domain(parsed.netloc),
-                                'raw_domain': raw_domain,
+                                'raw_domain': parsed.netloc,
                                 'protocol': parsed.scheme,
                                 'path': parsed.path,
                                 'query': parsed.query,
                                 'fragment': parsed.fragment,
-                                'is_resolved': is_resolved,
-                                **(metadata.to_dict() if metadata else {
-                                    'title': None,
-                                    'fetch_status': 'not_attempted',
-                                    'fetch_error': None,
-                                    'content_type': None,
-                                    'last_fetch_time': None
-                                })
+                                'is_resolved': False  # Will be updated if URL is resolved
                             })
+                        
+                        # Update progress after each tweet
+                        tweet_pbar.update(1)
+                        # Periodically update description to show URL count
+                        if len(url_data) % 100 == 0 and url_data:
+                            tweet_pbar.set_description(f"Processing tweets ({len(url_data)} URLs found)")
+            
+            # Process URL resolution if needed
+            for url_data_item in url_data:
+                if url_data_item['is_resolved'] == False:
+                    url = url_data_item['url']
+                    if self.should_resolve_url(url):
+                        logger.debug(f"Attempting to resolve shortened URL: {url}")
+                        resolved = self.resolve_url(url)
+                        if resolved:
+                            logger.debug(f"Successfully resolved {url} -> {resolved}")
+                            url_data_item['is_resolved'] = True
+                            url_data_item['url'] = resolved
+                        else:
+                            logger.debug(f"Failed to resolve shortened URL: {url}")
+                            url_data_item['is_resolved'] = False
+                    else:
+                        url_data_item['is_resolved'] = False
             
             return pd.DataFrame(url_data)
             
@@ -437,16 +433,21 @@ class URLAnalyzer:
             return pd.DataFrame()
 
     def analyze_archives(self) -> pd.DataFrame:
-        """Analyze all archives and return a DataFrame."""
-        archives = list(self.archive_dir.glob("*_archive.json"))
-        logger.info(f"Found {len(archives)} archives to analyze")
-        
-        # Process each archive and collect DataFrames
+        """Analyze URLs across all archives."""
         dfs = []
-        for archive in tqdm(archives, desc="Analyzing archives"):
-            df = self.analyze_archive(archive)
-            if not df.empty:
-                dfs.append(df)
+        archives = list(self.archive_dir.glob("*_archive.json"))
+        
+        # Add main progress bar for archives
+        with tqdm(total=len(archives), desc="Analyzing archives", position=0) as archive_pbar:
+            for archive_path in archives:
+                username = archive_path.stem.replace('_archive', '')
+                archive_pbar.set_description(f"Analyzing archive: {username}")
+                
+                df = self.analyze_archive(archive_path)
+                if not df.empty:
+                    dfs.append(df)
+                    
+                archive_pbar.update(1)
         
         # Combine all DataFrames
         if dfs:
@@ -499,6 +500,21 @@ def main():
         debug_handler.setLevel(logging.DEBUG)
         debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logging.getLogger().addHandler(debug_handler)
+
+    # Configure logging to work with tqdm
+    class TqdmLoggingHandler(logging.Handler):
+        def emit(self, record):
+            try:
+                msg = self.format(record)
+                tqdm.write(msg)
+                self.flush()
+            except Exception:
+                self.handleError(record)
+    
+    # Add tqdm-compatible handler
+    tqdm_handler = TqdmLoggingHandler()
+    tqdm_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logging.getLogger().addHandler(tqdm_handler)
 
     output_file = args.output or Path('urls.parquet')
     existing_df = None
