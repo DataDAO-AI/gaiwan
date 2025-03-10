@@ -447,6 +447,23 @@ class URLAnalyzer:
                 if not df.empty:
                     dfs.append(df)
                     
+                    # Save incremental results after each archive
+                    if hasattr(self, 'output_file') and self.output_file:
+                        # Create combined DataFrame with all processed archives so far
+                        combined_df = pd.concat(dfs, ignore_index=True)
+                        
+                        # Create temp file to avoid corrupting the main file if interrupted
+                        temp_file = self.output_file.with_name(f"{self.output_file.stem}_temp.parquet")
+                        combined_df.to_parquet(temp_file)
+                        
+                        # Safely rename to the actual output file
+                        if temp_file.exists():
+                            if self.output_file.exists():
+                                self.output_file.unlink()  # Remove existing file
+                            temp_file.rename(self.output_file)
+                            
+                        logger.info(f"Saved incremental results after processing {username}. Total URLs: {len(combined_df)}")
+                    
                 archive_pbar.update(1)
         
         # Combine all DataFrames
@@ -531,6 +548,9 @@ def main():
             existing_df = None
 
     analyzer = URLAnalyzer(args.archive_dir)
+    # Set the output file path for incremental saving
+    analyzer.output_file = output_file
+    
     archives = list(analyzer.archive_dir.glob("*_archive.json"))
     
     # Filter out already processed archives
