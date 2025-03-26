@@ -136,35 +136,12 @@ class URLAnalyzer:
     Args:
         archive_dir (Path): Directory containing Twitter archive files
             (expected format: username_archive.json)
-    
-    Example usage:
-        analyzer = URLAnalyzer(Path('archives'))
-        df = analyzer.analyze_archives()
-        
-        # Get URLs from specific archive
-        user_df = analyzer.analyze_archive(Path('archives/username_archive.json'))
-    
-    Domain normalization rules:
-        - twitter.com includes x.com and www.twitter.com
-        - youtube.com includes youtu.be
-        - wikipedia.org includes language variants
-        - *.substack.com -> substack.com
-        - *.medium.com -> medium.com
-        - github.com includes raw.githubusercontent.com
-    
-    URL shorteners handled:
-        - t.co (Twitter)
-        - bit.ly
-        - buff.ly
-        - tinyurl.com
-        - ow.ly
-        - goo.gl
-        - tiny.cc
-        - is.gd
+        output_file (Path, optional): Path to save the output parquet file
     """
 
-    def __init__(self, archive_dir: Path):
+    def __init__(self, archive_dir: Path, output_file: Optional[Path] = None):
         self.archive_dir = archive_dir
+        self.output_file = output_file
         # Improved URL pattern to better match Twitter URLs
         self.url_pattern = re.compile(
             r'https?://(?:(?:www\.)?twitter\.com/[a-zA-Z0-9_]+/status/[0-9]+|'
@@ -389,6 +366,10 @@ class URLAnalyzer:
                         urls = self.extract_urls_from_tweet(tweet)
                         for url in urls:
                             parsed = urlparse(url)
+                            # Get metadata for the URL
+                            metadata = self.get_page_metadata(url)
+                            metadata_dict = metadata.to_dict()
+                            
                             url_data.append({
                                 'username': username,
                                 'tweet_id': tweet_id,
@@ -400,7 +381,8 @@ class URLAnalyzer:
                                 'path': parsed.path,
                                 'query': parsed.query,
                                 'fragment': parsed.fragment,
-                                'is_resolved': False  # Will be updated if URL is resolved
+                                'is_resolved': False,  # Will be updated if URL is resolved
+                                **metadata_dict  # Add all metadata fields
                             })
                         
                         # Update progress after each tweet
@@ -481,7 +463,7 @@ def main():
     archives not present in existing output file.
     
     Arguments:
-        archive_dir: Directory containing Twitter archives
+        archive_path: Path to either a directory containing Twitter archives or a single archive file
         --debug: Enable debug logging
         --output: Custom output file path (default: urls.parquet)
         --force: Force reanalysis of all archives
@@ -499,7 +481,7 @@ def main():
     """
     import argparse
     parser = argparse.ArgumentParser(description="Analyze URLs in Twitter archives")
-    parser.add_argument('archive_dir', type=Path, help="Directory containing archives")
+    parser.add_argument('archive_path', type=Path, help="Directory containing archives or path to single archive file")
     parser.add_argument('--debug', action='store_true', help="Enable debug logging")
     parser.add_argument('--output', type=Path, help="Save DataFrame to CSV/Parquet file")
     parser.add_argument('--force', action='store_true', help="Force reanalysis of all archives")
@@ -547,11 +529,14 @@ def main():
             logger.error(f"Error loading existing data: {e}")
             existing_df = None
 
-    analyzer = URLAnalyzer(args.archive_dir)
-    # Set the output file path for incremental saving
-    analyzer.output_file = output_file
-    
-    archives = list(analyzer.archive_dir.glob("*_archive.json"))
+    # Handle both file and directory inputs
+    archive_path = args.archive_path
+    if archive_path.is_file() and archive_path.name.endswith('_archive.json'):
+        analyzer = URLAnalyzer(archive_path.parent, output_file)
+        archives = [archive_path]
+    else:
+        analyzer = URLAnalyzer(archive_path, output_file)
+        archives = list(analyzer.archive_dir.glob("*_archive.json"))
     
     # Filter out already processed archives
     if existing_df is not None and not args.force:
