@@ -1,3 +1,8 @@
+from ..config import config
+
+# This file is kept for backward compatibility and to maintain the module structure
+# All configuration is now handled by the main config.py file
+
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional
