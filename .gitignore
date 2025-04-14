@@ -57,3 +57,11 @@ config.json
 !gaiwan/__init__.py
 !gaiwan/mixpr.py
 testing.parquet
+*.parquet
+*.json
+*.csv
+*.txt
+*.md
+*.html
+*.jsonl
+*.jsonl.gz
