@@ -71,3 +71,6 @@ class Config:
             if hasattr(config, key):
                 setattr(config, key, value)
         return config
+
+# Create a global config instance
+config = Config()
