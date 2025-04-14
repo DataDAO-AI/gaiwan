@@ -56,3 +56,4 @@ config.json
 !gaiwan/
 !gaiwan/__init__.py
 !gaiwan/mixpr.py
+testing.parquet
