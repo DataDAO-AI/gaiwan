@@ -17,6 +17,7 @@ import functools
 from bs4 import BeautifulSoup
 import time
 from threading import Semaphore
+from .config import config
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +231,7 @@ class URLAnalyzer:
         # Set up requests session with retries
         self.session = requests.Session()
         retries = Retry(
-            total=3,
+            total=config.max_retries,
             backoff_factor=0.5,
             status_forcelist=[429, 500, 502, 503, 504]
         )
@@ -242,7 +243,7 @@ class URLAnalyzer:
         self._metadata_cache: Dict[str, 'PageMetadata'] = {}
         
         # Set a reasonable timeout for requests
-        self.timeout = 10
+        self.timeout = config.request_timeout
         
         # Add common headers to appear more like a browser
         self.session.headers.update({
@@ -252,7 +253,7 @@ class URLAnalyzer:
         })
 
         # Rate limiter
-        self.rate_limiter = RateLimiter(max_requests_per_second=10)
+        self.rate_limiter = RateLimiter(max_requests_per_second=config.max_requests_per_second)
 
     def normalize_domain(self, domain: str) -> str:
         """Normalize domain names to group related sites."""
