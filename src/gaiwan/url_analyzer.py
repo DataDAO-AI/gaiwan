@@ -14,6 +14,9 @@ import requests
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 import functools
+from bs4 import BeautifulSoup
+import time
+from threading import Semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +127,54 @@ class PageMetadata:
         self.fetch_error = None
         self.last_fetch_time = datetime.now(timezone.utc)
 
+class DomainRetryPolicy:
+    """Policy for handling retries for specific domains."""
+    def __init__(self):
+        self.max_retries = 3
+        self.max_retry_time = 3600  # 1 hour in seconds
+        self.blacklisted_domains = set()
+        self.domain_retry_counts = {}
+        
+    def should_retry(self, domain: str, error_code: int) -> bool:
+        """Determine if we should retry a request for this domain."""
+        if domain in self.blacklisted_domains:
+            return False
+            
+        if error_code in [403, 404]:  # Permanent errors
+            self.blacklisted_domains.add(domain)
+            return False
+            
+        retry_count = self.domain_retry_counts.get(domain, 0)
+        if retry_count >= self.max_retries:
+            self.blacklisted_domains.add(domain)
+            return False
+            
+        self.domain_retry_counts[domain] = retry_count + 1
+        return True
+
+class RateLimiter:
+    """Rate limiter for controlling request frequency."""
+    def __init__(self, max_requests_per_second: int):
+        self.semaphore = Semaphore(max_requests_per_second)
+        self.last_request_time = 0
+        self.retry_policy = DomainRetryPolicy()
+        
+    def acquire(self, domain: str = None):
+        """Acquire a permit, waiting if necessary."""
+        self.semaphore.acquire()
+        current_time = time.time()
+        if current_time - self.last_request_time < 1.0:
+            time.sleep(1.0 - (current_time - self.last_request_time))
+        self.last_request_time = time.time()
+        
+    def release(self):
+        """Release a permit."""
+        self.semaphore.release()
+        
+    def should_retry(self, domain: str, error_code: int) -> bool:
+        """Check if we should retry a failed request."""
+        return self.retry_policy.should_retry(domain, error_code)
+
 class URLAnalyzer:
     """Analyzes URLs in Twitter archive data.
     
@@ -199,6 +250,9 @@ class URLAnalyzer:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
         })
+
+        # Rate limiter
+        self.rate_limiter = RateLimiter(max_requests_per_second=10)
 
     def normalize_domain(self, domain: str) -> str:
         """Normalize domain names to group related sites."""
@@ -286,18 +340,13 @@ class URLAnalyzer:
         return urls
 
     def get_page_metadata(self, url: str) -> 'PageMetadata':
-        """Fetch and extract metadata from a webpage.
-        
-        Args:
-            url: The URL to fetch metadata from
-            
-        Returns:
-            PageMetadata object containing the results
-        """
+        """Fetch and extract metadata from a webpage."""
         if url in self._metadata_cache:
             return self._metadata_cache[url]
-            
+        
         metadata = PageMetadata(url)
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc
         
         try:
             # Don't try to get metadata from certain file types
@@ -306,6 +355,14 @@ class URLAnalyzer:
                 self._metadata_cache[url] = metadata
                 return metadata
 
+            # Special handling for Twitter/X URLs
+            if parsed_url.netloc in ['twitter.com', 'x.com']:
+                metadata.title = f"Twitter/X post by {parsed_url.path.split('/')[1]}"
+                metadata.mark_success('text/html')
+                self._metadata_cache[url] = metadata
+                return metadata
+
+            self.rate_limiter.acquire(domain)
             response = self.session.get(url, timeout=self.timeout, stream=True)
             response.raise_for_status()
             
@@ -316,25 +373,51 @@ class URLAnalyzer:
                 self._metadata_cache[url] = metadata
                 return metadata
             
-            # Read just enough of the response to find metadata
-            content = ''
-            for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
-                content += chunk
-                if '</head>' in content.lower():
-                    break
-                if len(content) > 100000:  # Don't read more than ~100KB
-                    break
+            # Read the complete content
+            content = response.text
             
-            # Extract title
-            title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
-            if title_match:
-                metadata.title = ' '.join(title_match.group(1).strip().split())
+            # Store HTML if enabled
+            if self.store_html:
+                # Clean HTML if enabled
+                if self.clean_html:
+                    content = self.clean_html_content(content)
+                    
+                # Compress HTML if enabled
+                if self.compress_html:
+                    content = self.compress_html_content(content)
+                    
+                metadata.html_content = content
+            
+            # Parse with BeautifulSoup
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # Extract title - handle case where title tag doesn't exist
+            title_tag = soup.find('title')
+            if title_tag and title_tag.text:
+                metadata.title = title_tag.text.strip()
+            else:
+                metadata.title = url  # Fallback to URL if no title found
+            
+            # Extract all metadata
+            metadata.extract_metadata(soup)
             
             metadata.mark_success(content_type)
             self._metadata_cache[url] = metadata
             logger.debug(f"Successfully fetched metadata for {url}")
             return metadata
                 
+        except requests.exceptions.HTTPError as e:
+            error_code = e.response.status_code
+            if self.rate_limiter.should_retry(domain, error_code):
+                logger.debug(f"Retrying {url} after {error_code} error")
+                time.sleep(5)  # Short delay before retry
+                return self.get_page_metadata(url)
+            else:
+                error_msg = f"HTTP {error_code}: {str(e)}"
+                metadata.mark_failed(error_msg)
+                logger.debug(f"Failed to fetch metadata for {url}: {error_msg}")
+                self._metadata_cache[url] = metadata
+                return metadata
         except Exception as e:
             error_msg = f"{type(e).__name__}: {str(e)}"
             metadata.mark_failed(error_msg)
