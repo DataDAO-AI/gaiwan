@@ -128,6 +128,28 @@ class PageMetadata:
         self.fetch_error = None
         self.last_fetch_time = datetime.now(timezone.utc)
 
+    def extract_metadata(self, soup: BeautifulSoup) -> None:
+        """Extract metadata from BeautifulSoup object."""
+        # Extract meta description
+        meta_desc = soup.find('meta', attrs={'name': 'description'})
+        if meta_desc:
+            self.metadata['description'] = meta_desc.get('content')
+            
+        # Extract meta keywords
+        meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
+        if meta_keywords:
+            self.metadata['keywords'] = meta_keywords.get('content')
+            
+        # Extract OpenGraph title
+        og_title = soup.find('meta', property='og:title')
+        if og_title:
+            self.metadata['og_title'] = og_title.get('content')
+            
+        # Extract OpenGraph description
+        og_desc = soup.find('meta', property='og:description')
+        if og_desc:
+            self.metadata['og_description'] = og_desc.get('content')
+
 class DomainRetryPolicy:
     """Policy for handling retries for specific domains."""
     def __init__(self):
@@ -199,6 +221,11 @@ class URLAnalyzer:
             r'https?://(?:(?:www\.)?twitter\.com/[a-zA-Z0-9_]+/status/[0-9]+|'
             r'(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+)'
         )
+
+        # Initialize HTML storage settings from config
+        self.store_html = config.store_html
+        self.compress_html = config.compress_html
+        self.clean_html = config.clean_html
 
         # Add domain normalization rules
         self.domain_groups = {

@@ -33,9 +33,9 @@ class Config:
         self.pool_maxsize = 100
         
         # HTML processing
-        self.store_html = True
-        self.compress_html = True
-        self.clean_html = True
+        self.store_html = False  # Changed to False to avoid memory issues
+        self.compress_html = False  # Changed to False to avoid memory issues
+        self.clean_html = False  # Changed to False to avoid memory issues
         
         # Logging
         self.log_level = logging.INFO
