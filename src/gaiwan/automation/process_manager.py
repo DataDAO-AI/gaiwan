@@ -38,6 +38,7 @@ class ProcessManager:
         """Start analysis for a single partition folder."""
         output_path = self.config.output_dir / f"{partition}_results.parquet"
         partition_path = self.config.partition_dir / partition
+        content_cache_dir = partition_path / '.content_cache'
         
         if not partition_path.exists():
             logger.error(f"Partition directory not found: {partition_path}")
@@ -52,6 +53,7 @@ class ProcessManager:
                     "python", "-m", "gaiwan.url_analyzer",
                     str(partition_path),
                     "--output_file", str(output_path),
+                    "--content_cache_dir", str(content_cache_dir),
                     "--debug"
                 ],
                 stdout=subprocess.PIPE,

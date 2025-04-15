@@ -218,6 +218,7 @@ class URLAnalyzer:
     def __init__(self, archive_dir: Path, content_cache_dir: Path):
         self.archive_dir = archive_dir
         self.domain_normalizer = DomainNormalizer()
+        self.url_pattern = None  # Initialize the pattern variable
         self._setup_url_pattern()
         self._setup_http_session()
         self._setup_caches()
@@ -241,12 +242,6 @@ class URLAnalyzer:
         self.processed_archives = set()  # Track which archives have been processed
         self.archive_results = {}  # Store results per archive
         self.output_file = None  # Initialize output_file attribute
-
-        # Improved URL pattern to better match Twitter URLs
-        self.url_pattern = re.compile(
-            r'https?://(?:(?:www\.)?twitter\.com/[a-zA-Z0-9_]+/status/[0-9]+|'
-            r'(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+)'
-        )
 
         # Initialize HTML storage settings from config
         self.store_html = config.store_html
@@ -307,6 +302,42 @@ class URLAnalyzer:
 
         # Rate limiter
         self.rate_limiter = RateLimiter(max_requests_per_second=config.max_requests_per_second)
+
+    def _setup_url_pattern(self):
+        """Set up the URL pattern for extracting URLs from tweets."""
+        # Improved URL pattern to better match Twitter URLs
+        self.url_pattern = re.compile(
+            r'https?://(?:(?:www\.)?twitter\.com/[a-zA-Z0-9_]+/status/[0-9]+|'
+            r'(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+)'
+        )
+
+    def _setup_http_session(self):
+        """Set up the HTTP session with retries and headers."""
+        # Set up requests session with retries
+        self.session = requests.Session()
+        retries = Retry(
+            total=config.max_retries,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504]
+        )
+        self.session.mount('http://', HTTPAdapter(max_retries=retries))
+        self.session.mount('https://', HTTPAdapter(max_retries=retries))
+        
+        # Set a reasonable timeout for requests
+        self.timeout = config.request_timeout
+        
+        # Add common headers to appear more like a browser
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        })
+
+    def _setup_caches(self):
+        """Set up caches for URL resolution and metadata."""
+        # Cache for resolved URLs and metadata
+        self._url_cache: Dict[str, Optional[str]] = {}
+        self._metadata_cache: Dict[str, 'PageMetadata'] = {}
 
     def normalize_domain(self, domain: str) -> str:
         """Normalize domain names to group related sites."""
@@ -614,6 +645,7 @@ def main():
         --debug: Enable debug logging
         --output_file: Custom output file path (default: urls.parquet)
         --force: Force reanalysis of all archives
+        --content_cache_dir: Directory to store content cache (default: archive_path/.content_cache)
     
     The function will:
     1. Check for existing analysis file (urls.parquet)
@@ -629,6 +661,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help="Enable debug logging")
     parser.add_argument('--output_file', type=Path, help="Save DataFrame to Parquet file")
     parser.add_argument('--force', action='store_true', help="Force reanalysis of all archives")
+    parser.add_argument('--content_cache_dir', type=Path, help="Directory to store content cache")
     args = parser.parse_args()
 
     # Set up logging
@@ -641,7 +674,8 @@ def main():
     logger.info(f"Starting URL analysis for {args.archive_path}")
     
     # Initialize analyzer with output file if provided
-    analyzer = URLAnalyzer(archive_dir=args.archive_path)
+    content_cache_dir = args.content_cache_dir or args.archive_path / '.content_cache'
+    analyzer = URLAnalyzer(archive_dir=args.archive_path, content_cache_dir=content_cache_dir)
     if args.output_file:
         analyzer.output_file = args.output_file
         logger.info(f"Results will be saved to: {args.output_file}")
@@ -667,11 +701,12 @@ def main():
 
     # Handle both file and directory inputs
     archive_path = args.archive_path
+    content_cache_dir = args.content_cache_dir or args.archive_path / '.content_cache'
     if archive_path.is_file() and archive_path.name.endswith('_archive.json'):
-        analyzer = URLAnalyzer(archive_path.parent)
+        analyzer = URLAnalyzer(archive_dir=archive_path.parent, content_cache_dir=content_cache_dir)
         archives = [archive_path]
     else:
-        analyzer = URLAnalyzer(archive_path)
+        analyzer = URLAnalyzer(archive_dir=archive_path, content_cache_dir=content_cache_dir)
         archives = list(analyzer.archive_dir.glob("*_archive.json"))
     
     # Filter out already processed archives
