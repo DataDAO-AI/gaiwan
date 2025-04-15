@@ -18,6 +18,8 @@ from bs4 import BeautifulSoup
 import time
 from threading import Semaphore
 from .config import config
+from .twitter_archive_processor.url_analysis.domain import DomainNormalizer
+from .twitter_archive_processor.url_analysis.content import ContentAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -213,9 +215,33 @@ class URLAnalyzer:
         output_file (Path, optional): Path to save the output parquet file
     """
 
-    def __init__(self, archive_dir: Path, output_file: Optional[Path] = None):
+    def __init__(self, archive_dir: Path, content_cache_dir: Path):
         self.archive_dir = archive_dir
-        self.output_file = output_file
+        self.domain_normalizer = DomainNormalizer()
+        self._setup_url_pattern()
+        self._setup_http_session()
+        self._setup_caches()
+        
+        # Default to system temp directory if no paths provided
+        if content_cache_dir is None and archive_dir is None:
+            content_cache_dir = Path.home() / ".cache" / "twitter_archive_processor"
+        elif content_cache_dir is None and archive_dir is not None:
+            content_cache_dir = archive_dir / '.content_cache'
+            
+        self.content_analyzer = ContentAnalyzer(content_cache_dir)
+        
+        # Initialize archives list
+        self.archives = []
+        if self.archive_dir:
+            # Update the glob pattern to match test files
+            self.archives = list(self.archive_dir.glob("*.json"))
+            logger.debug(f"Found {len(self.archives)} archive files in {self.archive_dir}")
+        
+        self.batch_size = 100  # Number of URLs to process at once
+        self.processed_archives = set()  # Track which archives have been processed
+        self.archive_results = {}  # Store results per archive
+        self.output_file = None  # Initialize output_file attribute
+
         # Improved URL pattern to better match Twitter URLs
         self.url_pattern = re.compile(
             r'https?://(?:(?:www\.)?twitter\.com/[a-zA-Z0-9_]+/status/[0-9]+|'
@@ -566,6 +592,16 @@ class URLAnalyzer:
             return combined_df
         return pd.DataFrame()
 
+class TqdmLoggingHandler(logging.Handler):
+    """Logging handler that works with tqdm progress bars."""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
 def main():
     """Command-line interface for URL analysis.
     
@@ -576,7 +612,7 @@ def main():
     Arguments:
         archive_path: Path to either a directory containing Twitter archives or a single archive file
         --debug: Enable debug logging
-        --output: Custom output file path (default: urls.parquet)
+        --output_file: Custom output file path (default: urls.parquet)
         --force: Force reanalysis of all archives
     
     The function will:
@@ -586,47 +622,36 @@ def main():
     4. Create backup of existing analysis
     5. Save updated analysis
     6. Print summary statistics
-    
-    Output format is Parquet by default, optimized for further analysis
-    with pandas.
     """
     import argparse
     parser = argparse.ArgumentParser(description="Analyze URLs in Twitter archives")
     parser.add_argument('archive_path', type=Path, help="Directory containing archives or path to single archive file")
     parser.add_argument('--debug', action='store_true', help="Enable debug logging")
-    parser.add_argument('--output', type=Path, help="Save DataFrame to CSV/Parquet file")
+    parser.add_argument('--output_file', type=Path, help="Save DataFrame to Parquet file")
     parser.add_argument('--force', action='store_true', help="Force reanalysis of all archives")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%H:%M:%S'
-    )
-
-    # Add a file handler for debug logging regardless of console level
-    if not args.debug:
-        debug_handler = logging.FileHandler('url_resolution.log')
-        debug_handler.setLevel(logging.DEBUG)
-        debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logging.getLogger().addHandler(debug_handler)
-
-    # Configure logging to work with tqdm
-    class TqdmLoggingHandler(logging.Handler):
-        def emit(self, record):
-            try:
-                msg = self.format(record)
-                tqdm.write(msg)
-                self.flush()
-            except Exception:
-                self.handleError(record)
+    # Set up logging
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting URL analysis for {args.archive_path}")
+    
+    # Initialize analyzer with output file if provided
+    analyzer = URLAnalyzer(archive_dir=args.archive_path)
+    if args.output_file:
+        analyzer.output_file = args.output_file
+        logger.info(f"Results will be saved to: {args.output_file}")
     
     # Add tqdm-compatible handler
     tqdm_handler = TqdmLoggingHandler()
     tqdm_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
     logging.getLogger().addHandler(tqdm_handler)
 
-    output_file = args.output or Path('urls.parquet')
+    output_file = args.output_file or Path('urls.parquet')
     existing_df = None
     processed_archives = set()
 
@@ -643,10 +668,10 @@ def main():
     # Handle both file and directory inputs
     archive_path = args.archive_path
     if archive_path.is_file() and archive_path.name.endswith('_archive.json'):
-        analyzer = URLAnalyzer(archive_path.parent, output_file)
+        analyzer = URLAnalyzer(archive_path.parent)
         archives = [archive_path]
     else:
-        analyzer = URLAnalyzer(archive_path, output_file)
+        analyzer = URLAnalyzer(archive_path)
         archives = list(analyzer.archive_dir.glob("*_archive.json"))
     
     # Filter out already processed archives
@@ -730,8 +755,8 @@ def main():
     print(df['protocol'].value_counts())
 
     # Save DataFrame
-    if args.output:
-        output_path = args.output
+    if args.output_file:
+        output_path = args.output_file
     else:
         # Create backup of existing file
         if output_file.exists():

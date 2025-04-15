@@ -20,7 +20,14 @@ class Config:
         max_processes: Optional[int] = None,
         memory_threshold: float = 0.8,
         blacklist_file: str = "blacklist.json",
-        status_file: str = "status.json"
+        status_file: str = "status.json",
+        archives_dir: str = "archives",
+        max_folder_size: int = 1073741824,  # 1GB in bytes
+        split_dir: str = "temp_splits",
+        partition_dir: str = "partitions",
+        store_html: bool = True,
+        compress_html: bool = True,
+        clean_html: bool = True
     ):
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -31,9 +38,18 @@ class Config:
         self.memory_threshold = memory_threshold
         self.blacklist_file = Path(blacklist_file)
         self.status_file = Path(status_file)
+        self.archives_dir = Path(archives_dir)
+        self.max_folder_size = max_folder_size
+        self.split_dir = Path(split_dir)
+        self.partition_dir = Path(partition_dir)
+        self.store_html = store_html
+        self.compress_html = compress_html
+        self.clean_html = clean_html
         
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.split_dir.mkdir(parents=True, exist_ok=True)
+        self.partition_dir.mkdir(parents=True, exist_ok=True)
         
     @classmethod
     def from_file(cls, config_path: str) -> 'Config':
@@ -58,7 +74,14 @@ class Config:
             'max_processes': self.max_processes,
             'memory_threshold': self.memory_threshold,
             'blacklist_file': str(self.blacklist_file),
-            'status_file': str(self.status_file)
+            'status_file': str(self.status_file),
+            'archives_dir': str(self.archives_dir),
+            'max_folder_size': self.max_folder_size,
+            'split_dir': str(self.split_dir),
+            'partition_dir': str(self.partition_dir),
+            'store_html': self.store_html,
+            'compress_html': self.compress_html,
+            'clean_html': self.clean_html
         }
         
         with open(config_path, 'w') as f:

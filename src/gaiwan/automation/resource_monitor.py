@@ -39,7 +39,11 @@ class ResourceMonitor:
             try:
                 cmdline = proc.info['cmdline']
                 if cmdline and 'url_analyzer' in ' '.join(cmdline):
-                    active.append(proc)
+                    # Only count processes that are actually running and are our analyzer processes
+                    if (proc.status() in [psutil.STATUS_RUNNING, psutil.STATUS_SLEEPING] and
+                        len(cmdline) > 1 and  # Must have arguments
+                        '--output' in cmdline):  # Must be an analyzer process (not a helper)
+                        active.append(proc)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return active

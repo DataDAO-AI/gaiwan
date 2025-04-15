@@ -26,11 +26,11 @@ class Config:
         self.max_requests_per_second = 5  # Rate limiting
         self.max_retries = 3  # Number of retries for failed requests
         self.request_timeout = 10  # Seconds
-        self.batch_size = 10  # Number of URLs to process in parallel
+        self.batch_size = 25  # Reduced from 100 to 25 to lower memory usage
         
         # Connection pooling
-        self.pool_connections = 100
-        self.pool_maxsize = 100
+        self.pool_connections = 50  # Reduced from 100
+        self.pool_maxsize = 50  # Reduced from 100
         
         # HTML processing
         self.store_html = False  # Changed to False to avoid memory issues
@@ -44,6 +44,7 @@ class Config:
         # Process management
         self.max_concurrent_processes = 4  # Maximum number of parallel analyzers
         self.min_memory_per_process = 512 * 1024 * 1024  # 512MB minimum memory per process
+        self.memory_threshold = 0.7  # Reduced from 0.8 to 0.7 for more conservative memory management
         
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -60,7 +61,8 @@ class Config:
             'compress_html': self.compress_html,
             'clean_html': self.clean_html,
             'max_concurrent_processes': self.max_concurrent_processes,
-            'min_memory_per_process': self.min_memory_per_process
+            'min_memory_per_process': self.min_memory_per_process,
+            'memory_threshold': self.memory_threshold
         }
         
     @classmethod
